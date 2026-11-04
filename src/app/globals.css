@@ -1,0 +1,186 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-atkinson);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-violet: var(--violet);
+  --color-violet-bg: var(--violet-bg);
+  --color-neutral: var(--neutral);
+  --color-neutral-bg: var(--neutral-bg);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --background: #F4F6F8;
+  --foreground: #14233B;
+  --card: #FFFFFF;
+  --card-foreground: #14233B;
+  --popover: #FFFFFF;
+  --popover-foreground: #14233B;
+  --primary: #0B7C7A;
+  --primary-foreground: #FFFFFF;
+  --secondary: #EAF0F3;
+  --secondary-foreground: #14233B;
+  --muted: #EEF1F4;
+  --muted-foreground: #566579;
+  --accent: #E4F3F2;
+  --accent-foreground: #0A5F5E;
+  --destructive: #B3261E;
+  --border: #DFE5EA;
+  --input: #CFD7DE;
+  --ring: #0B7C7A;
+  --chart-1: #0B7C7A;
+  --chart-2: #12264A;
+  --chart-3: #D98A1F;
+  --chart-4: #7A5BB5;
+  --chart-5: #B3261E;
+  --radius: 0.625rem;
+  --sidebar: #12264A;
+  --sidebar-foreground: #C9D5E6;
+  --sidebar-primary: #2BB5B0;
+  --sidebar-primary-foreground: #06282B;
+  --sidebar-accent: #1C3560;
+  --sidebar-accent-foreground: #FFFFFF;
+  --sidebar-border: #24406F;
+  --sidebar-ring: #2BB5B0;
+
+  /* Status colours. Each pairs with an icon and a word, never colour alone. */
+  --ok: #17704A;       --ok-bg: #E2F4EA;
+  --warn: #8F5A07;     --warn-bg: #FCF0D9;
+  --danger: #A61E17;   --danger-bg: #FBE7E5;
+  --info: #1F5AA6;     --info-bg: #E5EEFA;
+  --violet: #5B3F99;   --violet-bg: #EFEAF8;
+  --neutral: #4C5A6C;  --neutral-bg: #EBEFF3;
+
+  /* The tray: moulded plastic card and foil. */
+  --tray-plastic: #E7EDF1;
+  --tray-edge: #C6D1D9;
+  --well: #F8FAFB;
+  --foil-a: #D6EFEC;
+  --foil-b: #BFE5E1;
+}
+
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+html { font-size: 15px; font-feature-settings: "tnum" 1; }
+body { background: var(--background); }
+
+/* ---------- The tray ---------- */
+.tray-card {
+  background: linear-gradient(180deg, #EEF3F6 0%, var(--tray-plastic) 100%);
+  border: 1px solid var(--tray-edge);
+  box-shadow: inset 0 1px 0 #fff, 0 12px 32px -18px rgb(18 38 74 / .35);
+}
+.well {
+  position: relative;
+  background: var(--well);
+  border-radius: 12px;
+  box-shadow: inset 0 2px 5px rgb(18 38 74 / .14), inset 0 0 0 1px rgb(18 38 74 / .07), 0 1px 0 #fff;
+  transition: transform .14s ease, box-shadow .14s ease, opacity .18s ease;
+  text-align: left;
+  overflow: hidden;
+}
+.well[data-empty="true"] {
+  background: repeating-linear-gradient(135deg, transparent 0 6px, rgb(18 38 74 / .025) 6px 12px), #F1F4F6;
+  box-shadow: inset 0 1px 3px rgb(18 38 74 / .08), inset 0 0 0 1px rgb(18 38 74 / .05);
+}
+.well:not([data-empty="true"]):hover { transform: translateY(-2px); box-shadow: inset 0 0 0 1.5px var(--primary), 0 8px 18px -10px rgb(11 124 122 / .6); }
+.well[data-selected="true"] { box-shadow: inset 0 0 0 2px var(--primary), 0 0 0 3px rgb(11 124 122 / .22); }
+.well:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+.well[data-dim="true"] { opacity: .28; }
+.well[data-glow="true"] { box-shadow: inset 0 0 0 2px var(--chart-2), 0 6px 14px -8px rgb(18 38 74 / .6); }
+.well[data-status="discrepancy"] { background: var(--warn-bg); box-shadow: inset 0 0 0 1.5px var(--warn); }
+.well[data-correction="true"] { background: var(--danger-bg); box-shadow: inset 0 0 0 1.5px var(--danger); }
+
+/* Foil lid: slides across when a compartment is prepared. */
+.foil {
+  position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background:
+    linear-gradient(115deg, transparent 20%, rgb(255 255 255 / .55) 38%, transparent 52%),
+    linear-gradient(135deg, var(--foil-a), var(--foil-b));
+  box-shadow: inset 0 0 0 1.5px rgb(11 124 122 / .45);
+  mix-blend-mode: multiply;
+  transform-origin: left center;
+}
+.foil[data-animate="true"] { animation: foil-seal .46s cubic-bezier(.3,.8,.3,1) both; }
+@keyframes foil-seal { from { transform: scaleX(0); opacity: .4; } to { transform: scaleX(1); opacity: 1; } }
+
+.stamp[data-animate="true"] { animation: stamp-pop .34s .3s cubic-bezier(.3,1.6,.5,1) both; }
+@keyframes stamp-pop { from { transform: scale(0); } to { transform: scale(1); } }
+
+/* Pills fall into a well when a schedule is generated. */
+.pill-drop { animation: pill-drop .42s cubic-bezier(.3,1.25,.5,1) both; animation-delay: var(--drop-delay, 0ms); }
+@keyframes pill-drop { from { transform: translateY(-22px) rotate(-14deg); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.count-pill { transition: transform .12s ease, filter .12s ease; }
+.count-pill:hover { transform: scale(1.08); }
+.count-pill[data-counted="true"] { filter: saturate(.75) brightness(.95); transform: scale(.92); }
+
+.fade-in { animation: fade-in .22s ease both; }
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .foil[data-animate="true"], .stamp[data-animate="true"], .pill-drop, .fade-in { animation: none; }
+  .well, .count-pill { transition: none; }
+}
