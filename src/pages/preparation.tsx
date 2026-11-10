@@ -1,7 +1,5 @@
-"use client";
 
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardCheck, HandHelping, RefreshCw, RotateCcw, ScrollText, Send, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,6 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { PillArt } from "@/components/common/pill-art";
 import { Badge, TrayBadge } from "@/components/common/status-badge";
+import { STAFF } from "@/data/staff";
 import { Card, ClinicalNotice, ConfirmDialog, EmptyState, GuardedButton, notify, PageHeader, PERIOD_META, useGuard } from "@/components/common/ui";
 import { BatchFacts } from "@/components/tray/compartment-drawer";
 import { RxDetailDialog } from "@/components/tray/rx-detail-dialog";
@@ -56,7 +55,7 @@ function Key({ children }: { children: string }) {
 }
 
 function Workbench({ tray }: { tray: Tray }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const medicines = useAppStore((s) => s.medicines);
   const patient = useAppStore((s) => s.patients.find((p) => p.id === tray.patientId));
   const role = useAppStore((s) => s.role);
@@ -118,7 +117,7 @@ function Workbench({ tray }: { tray: Tray }) {
   return (
     <div className="space-y-3">
       <Card className="flex flex-wrap items-center gap-x-6 gap-y-3 p-4">
-        <Button variant="ghost" size="icon" aria-label="Back to the preparation queue" onClick={() => router.push("/preparation")}><ArrowLeft /></Button>
+        <Button variant="ghost" size="icon" aria-label="Back to the preparation queue" onClick={() => navigate("/preparation")}><ArrowLeft /></Button>
         <div className="min-w-[180px]">
           <p className="font-bold">{patient?.name}</p>
           <p className="text-[13px] text-muted-foreground">{tray.id}, {weekLabel(tray.weekStart)}</p>
@@ -148,7 +147,7 @@ function Workbench({ tray }: { tray: Tray }) {
       )}
       {!can(role, "tray.prepare") && (
         <p className="flex items-center gap-2 rounded-lg bg-info-bg px-3 py-2 text-[13px] text-info">
-          You are viewing as {ROLE_LABEL[role]}. Only Dispensing Staff can prepare compartments in this demo.
+          You are viewing as {ROLE_LABEL[role]}. Only Pharmacy Staff or MDS Preparation Staff can prepare compartments in this demo.
         </p>
       )}
 
@@ -221,7 +220,7 @@ function Workbench({ tray }: { tray: Tray }) {
                   <p className="font-semibold">{allDone ? `All ${progress.total} compartments prepared` : "Submit for pharmacist verification"}</p>
                   <p className="text-[13px] text-muted-foreground">{allDone ? "Preparation staff cannot approve a tray. It goes to the pharmacist next." : `Unlocks when all ${progress.total} compartments are prepared and discrepancies resolved.`}</p>
                 </div>
-                <GuardedButton perm="tray.prepare" what="submit trays" disabled={!allDone || !open} onClick={() => { if (notify(submitTray(tray.id))) router.push("/preparation"); }}><Send /> Submit for verification</GuardedButton>
+                <GuardedButton perm="tray.prepare" what="submit trays" disabled={!allDone || !open} onClick={() => { if (notify(submitTray(tray.id))) navigate("/preparation"); }}><Send /> Submit for verification</GuardedButton>
               </div>
             )}
           </div>
@@ -259,45 +258,86 @@ function Workbench({ tray }: { tray: Tray }) {
 function Queue() {
   const trays = useAppStore((s) => s.trays);
   const patients = useAppStore((s) => s.patients);
-  const medicines = useAppStore((s) => s.medicines);
-  const queue = trays.filter((t) => OPEN.includes(t.status)).sort((a, b) => a.weekStart.localeCompare(b.weekStart));
-  const waiting = trays.filter((t) => t.status === "awaiting-verification");
+  const enrolments = useAppStore((s) => s.enrolments);
+  const assignTray = useAppStore((s) => s.assignTray);
+  const [filter, setFilter] = useState("open");
+  const STAFF_PREP = STAFF.filter((u) => u.role === "mds" || u.role === "dispenser").map((u) => u.name);
+  const PENDING = ["scheduled", "awaiting-rx-validation", "proposed"];
+  const list = trays
+    .filter((t) => (filter === "open" ? OPEN.includes(t.status) : filter === "upcoming" ? PENDING.includes(t.status) : filter === "check" ? t.status === "awaiting-verification" : [...OPEN, ...PENDING, "awaiting-verification"].includes(t.status)))
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+  const exceptions = (t: Tray) => {
+    const out: string[] = [];
+    const p = trayProgress(t);
+    if (p.issues) out.push(`${p.issues} discrepanc${p.issues > 1 ? "ies" : "y"}`);
+    if (t.compartments.some((c) => c.correctionNote && c.status !== "prepared")) out.push("Correction requested");
+    if (t.needsRegeneration) out.push("Prescription changed");
+    if (t.compartments.some((c) => c.items.some((i) => !i.batchId))) out.push("No stock allocated");
+    if (t.flags.length) out.push(`${t.flags.length} kept out`);
+    return out;
+  };
+  const counts = { open: trays.filter((t) => OPEN.includes(t.status)).length, upcoming: trays.filter((t) => PENDING.includes(t.status)).length, check: trays.filter((t) => t.status === "awaiting-verification").length };
   return (
     <>
-      <PageHeader title="Tray Preparation" description="Pick a tray and work through it one compartment at a time." />
+      <PageHeader title="MDS Preparation Queue" description="Every weekly tray waiting for preparation, with its cycle, staff, progress and exceptions." />
       <ClinicalNotice>Preparation steps are simulated. Staff identity and timestamps come from the demo role, not a real login.</ClinicalNotice>
-      {queue.length === 0 && (
-        <Card><EmptyState icon={<HandHelping className="size-5" />} title="No trays waiting for preparation" body="A tray appears here after a pharmacist approves its proposed schedule." action={<Button render={<Link href="/trays" />}>Open weekly trays</Button>} /></Card>
-      )}
-      <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-        {queue.map((t) => {
-          const p = trayProgress(t);
-          const patient = patients.find((x) => x.id === t.patientId);
-          return (
-            <Link key={t.id} href={`/preparation?tray=${t.id}`} className="group rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary focus-visible:ring-3 focus-visible:ring-ring focus-visible:outline-none">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-bold">{patient?.name}</p>
-                  <p className="text-[13px] text-muted-foreground">{t.id}, {weekLabel(t.weekStart)}</p>
-                </div>
-                <TrayBadge status={t.status} />
-              </div>
-              <div className="pointer-events-none mt-3"><TrayGrid tray={t} medicines={medicines} density="compact" className="p-2 shadow-none" /></div>
-              <div className="mt-3 flex justify-between text-[13px]"><span className="font-semibold">{p.prepared} of {p.total} prepared</span>{t.type === "replacement" && <Badge tone="violet">Replacement</Badge>}</div>
-              <Progress value={p.pct} className="mt-1.5" aria-label={`Progress for ${t.id}`} />
-            </Link>
-          );
-        })}
+      <div className="mb-3 flex flex-wrap gap-1" role="tablist" aria-label="Queue filter">
+        {[["open", `To prepare (${counts.open})`], ["upcoming", `Planned and in review (${counts.upcoming})`], ["check", `With pharmacist (${counts.check})`], ["all", "All open work"]].map(([v, l]) => (
+          <button key={v} type="button" role="tab" aria-selected={filter === v} onClick={() => setFilter(v)} className={cn("rounded-lg px-3 py-1.5 text-[13px] font-medium", filter === v ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{l}</button>
+        ))}
       </div>
-      {waiting.length > 0 && (
-        <p className="mt-4 text-[13px] text-muted-foreground">{waiting.length} submitted tray{waiting.length > 1 ? "s are" : " is"} with the pharmacist. <Link className="font-medium text-primary hover:underline" href="/verification">See the verification queue</Link></p>
+      {list.length === 0 && (
+        <Card><EmptyState icon={<HandHelping className="size-5" />} title="Nothing in this part of the queue" body="A tray appears here after a pharmacist approves its proposed schedule." action={<Button render={<Link to="/mds" />}>Open MDS management</Button>} /></Card>
+      )}
+      {list.length > 0 && (
+        <Card className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-[13px] text-muted-foreground">
+                {["Patient", "MDS cycle", "Week", "Assigned staff", "Responsible pharmacist", "Progress", "Status", "Last update", "Exceptions", ""].map((h) => <th key={h} className="px-3 py-2 font-semibold">{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((t) => {
+                const p = trayProgress(t);
+                const patient = patients.find((x) => x.id === t.patientId);
+                const enrol = enrolments.find((e) => e.patientId === t.patientId);
+                const ex = exceptions(t);
+                const last = t.compartments.map((c) => c.preparedAt).filter(Boolean).sort().at(-1) ?? t.events.at(-1)?.at;
+                return (
+                  <tr key={t.id} className="border-b border-border/60 align-top last:border-0">
+                    <td className="px-3 py-2.5"><Link to={`/patients/${t.patientId}`} className="font-semibold hover:underline">{patient?.name}</Link><span className="block text-xs text-muted-foreground">{t.id}</span></td>
+                    <td className="px-3 py-2.5">{t.cycleId ?? <span className="text-muted-foreground">Single week</span>}</td>
+                    <td className="px-3 py-2.5">{t.cycleWeek ? `Week ${t.cycleWeek}` : ""}<span className="block text-xs text-muted-foreground">{weekLabel(t.weekStart)}</span></td>
+                    <td className="px-3 py-2.5">
+                      <select aria-label={`Assign ${t.id}`} className="h-8 rounded-md border border-input bg-card px-2 text-[13px]" value={t.assignedTo ?? ""} onChange={(e) => e.target.value && notify(assignTray(t.id, e.target.value))}>
+                        <option value="">Unassigned</option>
+                        {STAFF_PREP.map((n) => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2.5">{enrol?.responsiblePharmacist ?? "Not set"}</td>
+                    <td className="w-[140px] px-3 py-2.5"><span className="text-xs">{p.prepared} of {p.total}</span><Progress value={p.pct} className="mt-1" aria-label={`Progress for ${t.id}`} /></td>
+                    <td className="px-3 py-2.5"><TrayBadge status={t.status} /></td>
+                    <td className="px-3 py-2.5 text-xs text-muted-foreground">{last ? fmtDateTime(last) : ""}</td>
+                    <td className="px-3 py-2.5">{ex.length ? <span className="flex flex-col gap-1">{ex.map((e) => <Badge key={e} tone={/discrepanc|changed|Correction|No stock/.test(e) ? "danger" : "warn"}>{e}</Badge>)}</span> : <span className="text-xs text-muted-foreground">None</span>}</td>
+                    <td className="px-3 py-2.5">
+                      {OPEN.includes(t.status) ? <Button size="sm" render={<Link to={`/preparation?tray=${t.id}`} />}>Prepare</Button>
+                        : t.status === "awaiting-verification" ? <Button size="sm" variant="outline" render={<Link to={`/verification?tray=${t.id}`} />}>Verify</Button>
+                        : <Button size="sm" variant="outline" render={<Link to={t.cycleId ? `/mds?patient=${t.patientId}` : `/trays?tray=${t.id}`} />}>Open</Button>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
       )}
     </>
   );
 }
 
 function Inner() {
-  const params = useSearchParams();
+  const [params] = useSearchParams();
   const tray = useAppStore((s) => s.trays.find((t) => t.id === params.get("tray")));
   if (!tray) return <Queue />;
   return (

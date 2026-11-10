@@ -1,4 +1,3 @@
-"use client";
 
 import { useEffect, useRef, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
@@ -28,6 +27,8 @@ const schema = z.object({
   strength: z.string().trim().min(1, "Enter a strength"),
   form: z.enum(FORMS as [DosageForm, ...DosageForm[]]),
   manufacturer: z.string().trim().min(2, "Enter a manufacturer"),
+  formulation: z.string().trim().min(2, "Enter the formulation type"),
+  productCode: z.string().trim().min(4, "Enter a product identification code"),
   packSize: z.number({ error: "Enter a number" }).int().min(1, "At least 1"),
   unitPrice: z.number({ error: "Enter a number" }).min(0, "Cannot be negative"),
   reorderLevel: z.number({ error: "Enter a number" }).int().min(0, "Cannot be negative"),
@@ -40,6 +41,7 @@ type Values = z.infer<typeof schema>;
 
 const toValues = (m?: Medicine): Values => ({
   generic: m?.generic ?? "", brand: m?.brand ?? "", strength: m?.strength ?? "", form: m?.form ?? "Tablet", manufacturer: m?.manufacturer ?? "",
+  formulation: m?.formulation ?? "Immediate release", productCode: m?.productCode ?? `DEMO-${Date.now().toString().slice(-8)}`,
   packSize: m?.packSize ?? 30, unitPrice: m?.unitPrice ?? 1, reorderLevel: m?.reorderLevel ?? 30,
   suitability: m?.suitability ?? "review-required", suitabilityNote: m?.suitabilityNote ?? "New entry. A pharmacist decides per patient in this demo.",
   shape: m?.pill.shape ?? "round", color: m?.pill.color ?? "#FFFFFF",
@@ -75,7 +77,7 @@ export function MedicineForm({ open, onOpenChange, medicine, onSaved }: { open: 
 
   const submit = (v: Values) => {
     const r = saveMedicine({
-      id: medicine?.id, generic: v.generic, brand: v.brand, strength: v.strength, form: v.form as DosageForm, manufacturer: v.manufacturer,
+      id: medicine?.id, generic: v.generic, brand: v.brand, strength: v.strength, form: v.form as DosageForm, manufacturer: v.manufacturer, formulation: v.formulation, productCode: v.productCode,
       packSize: v.packSize, unitPrice: v.unitPrice, reorderLevel: v.reorderLevel, suitability: v.suitability as Suitability, suitabilityNote: v.suitabilityNote,
       pill: { ...(medicine?.pill ?? {}), shape: v.shape as PillShape, color: v.color }, imageDataUrl: image, isUserAdded: medicine?.isUserAdded ?? true,
     });
@@ -87,7 +89,7 @@ export function MedicineForm({ open, onOpenChange, medicine, onSaved }: { open: 
       <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{medicine ? `Edit ${medicine.brand}` : "Add mock medicine"}</DialogTitle>
-          <DialogDescription>A synthetic catalogue entry. Changing suitability or strength invalidates approved trays that use it.</DialogDescription>
+          <DialogDescription>A synthetic catalogue entry. Changing suitability or strength invalidates approved trays that use it. A live product would come from a licensed Indian medicine database (not connected in this demo).</DialogDescription>
         </DialogHeader>
         <form id="medicine-form" onSubmit={handleSubmit(submit)} className="grid gap-3 sm:grid-cols-[150px_1fr]">
           <div className="space-y-2">
@@ -117,6 +119,8 @@ export function MedicineForm({ open, onOpenChange, medicine, onSaved }: { open: 
             <Field label="Strength" error={errors.strength?.message}><Input placeholder="500 mg" {...register("strength")} /></Field>
             <Field label="Dosage form"><Controller control={control} name="form" render={({ field }) => <Pick value={field.value} onChange={field.onChange} options={FORMS.map((f) => ({ value: f, label: f }))} />} /></Field>
             <Field label="Manufacturer" error={errors.manufacturer?.message}><Input {...register("manufacturer")} /></Field>
+            <Field label="Formulation type" error={errors.formulation?.message}><Input placeholder="Immediate release, enteric coated..." {...register("formulation")} /></Field>
+            <Field label="Product identification code" hint="Synthetic in this demo" error={errors.productCode?.message}><Input {...register("productCode")} /></Field>
             <Field label="Illustration"><Controller control={control} name="shape" render={({ field }) => <Pick value={field.value} onChange={field.onChange} options={SHAPES} />} /></Field>
             <Field label="Pack size" error={errors.packSize?.message}><Input type="number" {...register("packSize", { valueAsNumber: true })} /></Field>
             <Field label="Unit price (₹, mock)" error={errors.unitPrice?.message}><Input type="number" step="0.1" {...register("unitPrice", { valueAsNumber: true })} /></Field>

@@ -1,9 +1,8 @@
-"use client";
 
-import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
+import { Link } from "react-router";
 import { cloneElement, isValidElement, useId, useState } from "react";
-import { AlertTriangle, Lock, Sunrise, Sun, Sunset, Moon, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Lock, Sunrise, Sun, Sunset, Moon, ShieldAlert, Utensils } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -65,7 +64,7 @@ export function ClinicalNotice({ children }: { children?: ReactNode }) {
   );
 }
 
-const BUTTON_ROLE_PRIORITY: Role[] = ["pharmacist", "dispenser", "admin"];
+const BUTTON_ROLE_PRIORITY: Role[] = ["pharmacist", "dispenser", "mds", "reception", "delivery", "admin"];
 
 /** Hook for the "blocked action" explanation: tell why, offer the role that can do it. */
 export function useGuard() {
@@ -211,15 +210,19 @@ export function EmptyState({ icon, title, body, action }: { icon?: ReactNode; ti
   );
 }
 
-export const PERIOD_META: Record<Period, { label: string; time: string; icon: typeof Sun; tint: string }> = {
-  morning: { label: "Morning", time: "8 am", icon: Sunrise, tint: "text-[#B9750F]" },
-  lunchtime: { label: "Lunchtime", time: "1 pm", icon: Sun, tint: "text-[#C9860B]" },
-  evening: { label: "Evening", time: "6 pm", icon: Sunset, tint: "text-[#C2571A]" },
-  bedtime: { label: "Bedtime", time: "10 pm", icon: Moon, tint: "text-[#35507E]" },
+/** Before Food (BF) rows are tied to a meal and approved per patient, so their time is set on the enrolment. */
+export const PERIOD_META: Record<Period, { label: string; short: string; time: string; icon: typeof Sun; tint: string; bf?: boolean }> = {
+  "bf-breakfast": { label: "Before Breakfast", short: "BF breakfast", time: "per patient", icon: Utensils, tint: "text-[#0B7C7A]", bf: true },
+  morning: { label: "Morning", short: "Morning", time: "8 am", icon: Sunrise, tint: "text-[#B9750F]" },
+  "bf-lunch": { label: "Before Lunch", short: "BF lunch", time: "per patient", icon: Utensils, tint: "text-[#0B7C7A]", bf: true },
+  lunchtime: { label: "Lunchtime", short: "Lunchtime", time: "1 pm", icon: Sun, tint: "text-[#C9860B]" },
+  "bf-evening": { label: "Before Evening Meal", short: "BF evening meal", time: "per patient", icon: Utensils, tint: "text-[#0B7C7A]", bf: true },
+  evening: { label: "Evening", short: "Evening", time: "6 pm", icon: Sunset, tint: "text-[#C2571A]" },
+  bedtime: { label: "Bedtime", short: "Bedtime", time: "10 pm", icon: Moon, tint: "text-[#35507E]" },
 };
 
 export function TextLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
-  return <Link href={href} className={cn("font-medium text-primary hover:underline", className)}>{children}</Link>;
+  return <Link to={href} className={cn("font-medium text-primary hover:underline", className)}>{children}</Link>;
 }
 
 export function SearchInput({ value, onChange, placeholder, className }: { value: string; onChange: (v: string) => void; placeholder: string; className?: string }) {

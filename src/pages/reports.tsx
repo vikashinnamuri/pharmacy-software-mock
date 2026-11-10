@@ -1,7 +1,6 @@
-"use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 import { Lock } from "lucide-react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -61,7 +60,7 @@ export default function ReportsPage() {
       </Card>
       <div className="grid gap-3 xl:grid-cols-2">
         <Card>
-          <CardTitle title="Patient registration trend" hint="Patients on record at the end of each month" action={<Button size="sm" variant="ghost" render={<Link href="/patients" />}>Patients</Button>} />
+          <CardTitle title="Patient registration trend" hint="Patients on record at the end of each month" action={<Button size="sm" variant="ghost" render={<Link to="/patients" />}>Patients</Button>} />
           <div className="h-[240px] px-3 pb-3">
             <ResponsiveContainer>
               <AreaChart data={reg} margin={{ left: -18, right: 10, top: 4 }}>
@@ -74,7 +73,7 @@ export default function ReportsPage() {
           </div>
         </Card>
         <Card>
-          <CardTitle title="Prescriptions by status" action={<Button size="sm" variant="ghost" render={<Link href="/prescriptions" />}>Prescriptions</Button>} />
+          <CardTitle title="Prescriptions by status" action={<Button size="sm" variant="ghost" render={<Link to="/prescriptions" />}>Prescriptions</Button>} />
           <div className="h-[240px] px-3 pb-3">
             <ResponsiveContainer>
               <BarChart data={rx} layout="vertical" margin={{ left: 34, right: 18 }}>
@@ -101,7 +100,7 @@ export default function ReportsPage() {
           </div>
         </Card>
         <Card>
-          <CardTitle title="Pharmacist verification outcomes" hint="All simulated decisions on record" action={<Button size="sm" variant="ghost" render={<Link href="/verification" />}>Verification</Button>} />
+          <CardTitle title="Pharmacist verification outcomes" hint="All simulated decisions on record" action={<Button size="sm" variant="ghost" render={<Link to="/verification" />}>Verification</Button>} />
           <div className="h-[240px] px-3 pb-3">
             <ResponsiveContainer>
               <BarChart data={outcomes} layout="vertical" margin={{ left: 60, right: 18 }}>
@@ -114,7 +113,7 @@ export default function ReportsPage() {
           </div>
         </Card>
         <Card>
-          <CardTitle title="Pending trays" hint="Where open trays sit right now" action={<Button size="sm" variant="ghost" render={<Link href="/trays" />}>Trays</Button>} />
+          <CardTitle title="Pending trays" hint="Where open trays sit right now" action={<Button size="sm" variant="ghost" render={<Link to="/trays" />}>Trays</Button>} />
           <ul className="px-5 pb-4">
             {pending.map((p) => {
               const max = Math.max(1, ...pending.map((x) => x.count));
@@ -129,7 +128,7 @@ export default function ReportsPage() {
           </ul>
         </Card>
         <Card>
-          <CardTitle title="Inventory alerts" action={<Button size="sm" variant="ghost" render={<Link href="/inventory" />}>Inventory</Button>} />
+          <CardTitle title="Inventory alerts" action={<Button size="sm" variant="ghost" render={<Link to="/inventory" />}>Inventory</Button>} />
           <div className="grid grid-cols-3 gap-3 px-5 pb-3">
             <Stat label="Low stock" value={alerts.low.length} tone="text-warn" />
             <Stat label="Expiring soon" value={alerts.expiring.length} tone="text-warn" />
@@ -140,7 +139,7 @@ export default function ReportsPage() {
           </ul>
         </Card>
         <Card className="xl:col-span-2">
-          <CardTitle title="Mock revenue summary" hint="Simulated invoices only. No real payments are involved." action={<Button size="sm" variant="ghost" render={<Link href="/billing" />}>Billing</Button>} />
+          <CardTitle title="Mock revenue summary" hint="Simulated invoices only. No real payments are involved." action={<Button size="sm" variant="ghost" render={<Link to="/billing" />}>Billing</Button>} />
           <div className="h-[260px] px-3 pb-3">
             <ResponsiveContainer>
               <BarChart data={revenue} margin={{ left: 0, right: 10, top: 4 }}>

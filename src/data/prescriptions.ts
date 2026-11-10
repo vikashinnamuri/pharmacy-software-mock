@@ -25,6 +25,8 @@ function L(
     startDate: addDays(today(), -60),
     endDate: addDays(today(), 120),
     trayDecision: decision ?? "include",
+    quantity: units ? units * Math.max(1, times.length) * 28 : undefined,
+    mealRelation: /before/i.test(rest.instructions ?? "") ? "before-food" : /with food/i.test(rest.instructions ?? "") ? "with-food" : "none",
     ...rest,
   };
 }
@@ -87,7 +89,8 @@ export const buildPrescriptions = (): Prescription[] => {
     ]),
     R(3, "PT-1003", "verified", PN, 22, [
       L("MED-001", 1, ["morning", "lunchtime", "evening"], { instructions: "With food" }),
-      L("MED-010", 1, ["morning"], { instructions: "Before breakfast" }),
+      // Before Breakfast is an approved extra period on Kamala's MDS enrolment.
+      L("MED-010", 1, ["bf-breakfast"], { instructions: "Before breakfast", mealRelation: "before-food" }),
       L("MED-007", 1, ["morning"], { decision: "include", decisionNote: "Reviewed for this patient (demo)." }),
     ]),
     R(4, "PT-1004", "verified", AR, 20, [
@@ -154,6 +157,14 @@ export const buildPrescriptions = (): Prescription[] => {
     R(20, "PT-1002", "discontinued", SB, 90, [L("MED-004", 1, ["evening"]), L("MED-009", 1, ["morning"])], { supersededBy: "RX-2002" }),
     R(21, "PT-1010", "pending", VC, 2, [
       L("MED-006", 1, ["morning"], { decision: "undecided", instructions: "Before breakfast" }),
+    ]),
+    // Standard dispensing prescriptions (not on trays).
+    R(22, "PT-1017", "verified", RM, 1, [
+      L("MED-027", 1, ["morning"], { decision: "keep-out", decisionNote: "Not an MDS patient. Original packs." }),
+      L("MED-003", 1, ["bedtime"], { decision: "keep-out", decisionNote: "Not an MDS patient. Original packs." }),
+    ]),
+    R(23, "PT-1018", "verified", AR, 0, [
+      L("MED-007", 1, ["morning"], { decision: "keep-out", decisionNote: "Not an MDS patient.", instructions: "Before breakfast on an empty stomach" }),
     ]),
   ];
 };

@@ -10,7 +10,9 @@ There is no backend, database, authentication or API. Everything runs in the bro
 npm install
 npm run dev          # http://localhost:3000
 # or a production build
-npm run build && npm start
+npm run build && npm run preview
+# deploy the static build to Cloudflare (Workers Static Assets, SPA fallback)
+npm run deploy
 ```
 
 ## Presenting it
@@ -38,6 +40,8 @@ Seeded scenarios: TRY-1004 ready to supply, TRY-1005 awaiting preparation, TRY-1
 
 | Path | What it holds |
 | --- | --- |
+| `src/main.tsx`, `src/routes.tsx` | App entry and the route table (each page lazy-loaded) |
+| `src/pages` | One component per screen |
 | `src/types` | Domain interfaces |
 | `src/data` | Seed records; dates are relative to the day of first load |
 | `src/store/app-store.ts` | The single Zustand store and every workflow action |
@@ -46,4 +50,6 @@ Seeded scenarios: TRY-1004 ready to supply, TRY-1005 awaiting preparation, TRY-1
 | `src/lib/pdf/documents.ts` | Client-side jsPDF documents |
 | `src/components/tray` | The tray grid, compartment drawer and lifecycle |
 
-Stack: Next.js App Router, React, TypeScript, Tailwind CSS, shadcn/ui on Base UI, Lucide, Zustand, React Hook Form with Zod, TanStack Table, Recharts, jsPDF.
+Requires Node 22.22 or later.
+
+Stack: Vite, React, React Router, TypeScript, Tailwind CSS, shadcn/ui on Base UI, Lucide, Zustand, React Hook Form with Zod, TanStack Table, Recharts, jsPDF.

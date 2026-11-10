@@ -1,4 +1,3 @@
-"use client";
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, Ban, CheckCircle2, XCircle } from "lucide-react";
@@ -6,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Field, GuardedButton, notify, PERIOD_META } from "@/components/common/ui";
+import { Field, GuardedButton, notify } from "@/components/common/ui";
 import { PillArt } from "@/components/common/pill-art";
 import { SuitabilityBadge } from "@/components/common/status-badge";
-import { FREQUENCY_LABEL } from "@/components/tray/rx-detail-dialog";
+import { lineSummary, RxChangeList } from "@/components/tray/rx-detail-dialog";
+import { enrolmentFor } from "@/lib/selectors";
 import { fmtDate } from "@/lib/dates";
 import { lineBlockReason } from "@/lib/tray-engine";
 import { cn } from "@/lib/utils";
@@ -21,6 +21,7 @@ export function RxReviewDialog({ id, onClose }: { id: string | null; onClose: ()
   const rx = useAppStore((s) => s.prescriptions.find((p) => p.id === id));
   const patient = useAppStore((s) => s.patients.find((p) => p.id === rx?.patientId));
   const medicines = useAppStore((s) => s.medicines);
+  const enrolment = useAppStore((s) => (rx ? enrolmentFor(s, rx.patientId) : undefined));
   const reviewRx = useAppStore((s) => s.reviewRx);
   const [decisions, setDecisions] = useState<Record<string, { decision: TrayDecision; note?: string }>>({});
   const [note, setNote] = useState("");
@@ -37,7 +38,7 @@ export function RxReviewDialog({ id, onClose }: { id: string | null; onClose: ()
   const rows = rx.lines.map((l) => {
     const med = medicines.find((m) => m.id === l.medicineId);
     const decision = decisions[l.id]?.decision ?? "undecided";
-    const structural = lineBlockReason({ ...l, trayDecision: "include" }, med);
+    const structural = lineBlockReason({ ...l, trayDecision: "include" }, med, enrolment?.approvedPeriods ?? []);
     return { l, med, decision, structural, allergyHit: patient?.allergies.find((a) => med && (med.generic.toLowerCase().includes(a.toLowerCase()) || a.toLowerCase().includes(med.generic.toLowerCase().split(" ")[0]))) };
   });
   const undecided = rows.filter((r) => r.decision === "undecided").length;
@@ -52,6 +53,10 @@ export function RxReviewDialog({ id, onClose }: { id: string | null; onClose: ()
         {patient && patient.allergies.length > 0 && (
           <p className="flex items-center gap-1.5 rounded-lg bg-danger-bg px-3 py-2 text-[13px] font-semibold text-danger"><AlertTriangle className="size-4" /> Allergy on record: {patient.allergies.join(", ")}</p>
         )}
+        <RxChangeList rx={rx} />
+        {!enrolment || enrolment.status !== "active" ? (
+          <p className="rounded-lg bg-info-bg px-3 py-2 text-[13px] text-info">{patient?.name} is not on active MDS. Choose Keep out for lines dispensed in original packs.</p>
+        ) : null}
         <div className="space-y-2.5">
           {rows.map(({ l, med, decision, structural, allergyHit }) => (
             <div key={l.id} className="rounded-xl border border-border p-3">
@@ -59,7 +64,8 @@ export function RxReviewDialog({ id, onClose }: { id: string | null; onClose: ()
                 {med && <PillArt medicine={med} size={44} />}
                 <div className="min-w-[220px] flex-1">
                   <p className="font-semibold">{med?.brand} {l.strength} <span className="font-normal text-muted-foreground">({med?.generic})</span></p>
-                  <p className="text-[13px]">{l.dosage}, {FREQUENCY_LABEL[l.frequency].toLowerCase()}{l.times.length ? `: ${l.times.map((t) => PERIOD_META[t].label.toLowerCase()).join(", ")}` : ""}</p>
+                  <p className="text-[13px]">{lineSummary(l)}</p>
+                  {l.quantity && <p className="text-xs text-muted-foreground">Quantity {l.quantity}{l.durationDays ? ` for ${l.durationDays} days` : ""}</p>}
                   {l.instructions && <p className="text-[13px] text-muted-foreground">{l.instructions}</p>}
                   <div className="mt-1.5">{med && <SuitabilityBadge status={med.suitability} />}</div>
                   {med && med.suitability !== "suitable" && <p className="mt-1 text-xs text-muted-foreground">{med.suitabilityNote}</p>}

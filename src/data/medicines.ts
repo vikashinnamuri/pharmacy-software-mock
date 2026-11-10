@@ -4,7 +4,7 @@ import type { Medicine } from "@/types";
 // Suitability flags are illustrative and are not clinical guidance.
 const ok = "Marked suitable in this demo catalogue. A pharmacist still confirms it per prescription.";
 
-export const MEDICINES: Medicine[] = [
+const RAW: Omit<Medicine, "formulation" | "productCode">[] = [
   { id: "MED-001", generic: "Metformin", brand: "Glucora", strength: "500 mg", form: "Tablet", manufacturer: "Coromandel Labs (demo)", packSize: 30, suitability: "suitable", suitabilityNote: ok, pill: { shape: "round", color: "#F7F7F2", scored: true }, unitPrice: 2.4, reorderLevel: 120 },
   { id: "MED-002", generic: "Amlodipine", brand: "Vascoline", strength: "5 mg", form: "Tablet", manufacturer: "Adyar Pharma (demo)", packSize: 30, suitability: "suitable", suitabilityNote: ok, pill: { shape: "round", color: "#F4D9A0" }, unitPrice: 3.1, reorderLevel: 80 },
   { id: "MED-003", generic: "Atorvastatin", brand: "Lipistar", strength: "20 mg", form: "Tablet", manufacturer: "Coromandel Labs (demo)", packSize: 30, suitability: "suitable", suitabilityNote: ok, pill: { shape: "oval", color: "#FFFFFF" }, unitPrice: 5.8, reorderLevel: 80 },
@@ -33,3 +33,16 @@ export const MEDICINES: Medicine[] = [
   { id: "MED-026", generic: "Rosuvastatin", brand: "Rosulip", strength: "10 mg", form: "Tablet", manufacturer: "Besant Health (demo)", packSize: 30, suitability: "suitable", suitabilityNote: ok, pill: { shape: "round", color: "#F5B7C5" }, unitPrice: 6.9, reorderLevel: 40 },
   { id: "MED-027", generic: "Telmisartan", brand: "Telmicard", strength: "40 mg", form: "Tablet", manufacturer: "Coromandel Labs (demo)", packSize: 30, suitability: "suitable", suitabilityNote: ok, pill: { shape: "caplet", color: "#FAFAFA" }, unitPrice: 4.1, reorderLevel: 40 },
 ];
+
+// Formulation types are illustrative. Product codes are synthetic and are not real GTINs or licence numbers.
+const FORMULATION: Record<string, string> = {
+  "MED-005": "Gastro-resistant (enteric coated)", "MED-003": "Film coated", "MED-006": "Gastro-resistant", "MED-010": "Immediate release",
+  "MED-013": "Enteric coated", "MED-018": "Soft gelatin capsule", "MED-020": "Gastro-resistant pellets", "MED-021": "Modified release",
+  "MED-023": "Metered-dose inhaler", "MED-024": "Oral solution", "MED-025": "Hard capsule", "MED-008": "Hard capsule",
+};
+
+export const MEDICINES: Medicine[] = RAW.map((m, i) => ({
+  ...m,
+  formulation: FORMULATION[m.id] ?? "Immediate release",
+  productCode: `DEMO-89${String(4100 + i * 37).padStart(5, "0")}-${m.id.slice(4)}`,
+}));

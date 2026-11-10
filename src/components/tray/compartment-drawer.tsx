@@ -1,4 +1,3 @@
-"use client";
 
 import { useState } from "react";
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, RotateCcw, ScrollText, Undo2 } from "lucide-react";
@@ -18,7 +17,7 @@ export function BatchFacts({ batchId }: { batchId: string | null }) {
   const batch = useAppStore((s) => s.batches.find((b) => b.id === batchId));
   const trays = useAppStore((s) => s.trays);
   if (!batch) return <p className="flex items-center gap-1 text-[13px] font-medium text-danger"><AlertTriangle className="size-3.5" /> No batch allocated. Add stock, then assign one.</p>;
-  const reserved = reservedByBatch(trays)[batch.id] ?? 0;
+  const reserved = reservedByBatch(trays, useAppStore.getState().orders)[batch.id] ?? 0;
   const expired = isExpired(batch, today());
   const soon = !expired && daysBetween(today(), batch.expiryDate) <= 60;
   return (

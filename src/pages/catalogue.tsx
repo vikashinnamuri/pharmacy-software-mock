@@ -1,6 +1,5 @@
-"use client";
 
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "react-router";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { Pencil, PackageSearch, Plus } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -15,7 +14,7 @@ import { useAppStore } from "@/store/app-store";
 import type { Medicine } from "@/types";
 
 function Inner() {
-  const params = useSearchParams();
+  const [params] = useSearchParams();
   const medicines = useAppStore((s) => s.medicines);
   const batches = useAppStore((s) => s.batches);
   const trays = useAppStore((s) => s.trays);
@@ -32,12 +31,13 @@ function Inner() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (paramQ !== null) setQ(paramQ); }, [paramQ]);
 
-  const stock = useMemo(() => stockByMedicine({ batches, trays }), [batches, trays]);
+  const orders = useAppStore((s) => s.orders);
+  const stock = useMemo(() => stockByMedicine({ batches, trays, orders }), [batches, trays, orders]);
   const rows = useMemo(() => medicines.filter((m) => {
     if (form !== "all" && m.form !== form) return false;
     if (suit !== "all" && m.suitability !== suit) return false;
     if (maker !== "all" && m.manufacturer !== maker) return false;
-    return `${m.brand} ${m.generic} ${m.strength} ${m.manufacturer}`.toLowerCase().includes(q.toLowerCase());
+    return `${m.brand} ${m.generic} ${m.strength} ${m.manufacturer} ${m.formulation} ${m.productCode}`.toLowerCase().includes(q.toLowerCase());
   }), [medicines, form, suit, maker, q]);
   const view = medicines.find((m) => m.id === viewId);
   const viewBatches = batches.filter((b) => b.medicineId === viewId).sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
@@ -50,8 +50,9 @@ function Inner() {
         actions={<GuardedButton perm="catalogue.edit" what="add medicines" onClick={() => { setEditing(undefined); setFormOpen(true); }}><Plus /> Add Medicine</GuardedButton>}
       />
       <ClinicalNotice>This catalogue is not clinically authoritative. Suitability labels only demonstrate how the workflow behaves.</ClinicalNotice>
+      <p className="mb-3 rounded-lg border border-info/30 bg-info-bg px-3 py-2 text-[13px] text-info"><strong>Technical note:</strong> every entry here is synthetic. A live system needs a licensed Indian medicine database for names, strengths, formulations and product codes, and a licensed product-image source. Neither is connected in this demo. See docs/TECHNICAL-NOTES.md.</p>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <SearchInput value={q} onChange={setQ} placeholder="Search generic, brand or manufacturer" />
+        <SearchInput value={q} onChange={setQ} placeholder="Search generic, brand, formulation or code" />
         <Pick className="h-9 w-[150px]" value={form} onChange={setForm} options={[{ value: "all", label: "All forms" }, ...[...new Set(medicines.map((m) => m.form))].map((f) => ({ value: f, label: f }))]} />
         <Pick className="h-9 w-[180px]" value={suit} onChange={setSuit} options={[{ value: "all", label: "Any suitability" }, { value: "suitable", label: "Suitable for tray" }, { value: "review-required", label: "Review required" }, { value: "unsuitable", label: "Not for trays" }]} />
         <Pick className="h-9 w-[230px]" value={maker} onChange={setMaker} options={[{ value: "all", label: "All manufacturers" }, ...[...new Set(medicines.map((m) => m.manufacturer))].map((f) => ({ value: f, label: f }))]} />
@@ -65,6 +66,7 @@ function Inner() {
             <span className="flex flex-1 flex-col p-3">
               <span className="font-bold">{m.brand} <span className="font-medium">{m.strength}</span></span>
               <span className="text-[13px] text-muted-foreground">{m.generic}, {m.form.toLowerCase()}</span>
+              <span className="text-xs text-muted-foreground">{m.formulation}</span>
               <span className="text-xs text-muted-foreground">Pack of {m.packSize}</span>
               <span className="mt-2"><SuitabilityBadge status={m.suitability} /></span>
             </span>
@@ -90,6 +92,8 @@ function Inner() {
                   <div><dt className="text-xs text-muted-foreground">Dosage form</dt><dd className="font-medium">{view.form}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Pack size</dt><dd className="font-medium">{view.packSize}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Manufacturer</dt><dd className="font-medium">{view.manufacturer}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Formulation type</dt><dd className="font-medium">{view.formulation}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Product identification code</dt><dd className="font-medium">{view.productCode}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Mock unit price</dt><dd className="font-medium">{rupees(view.unitPrice)}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Free stock</dt><dd className="font-medium">{stock[view.id]?.free ?? 0} units</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Reorder level</dt><dd className="font-medium">{view.reorderLevel} units</dd></div>

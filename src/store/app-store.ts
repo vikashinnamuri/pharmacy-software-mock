@@ -1,26 +1,34 @@
-"use client";
-
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { buildSeed } from "@/data/seed";
 import { staffFor } from "@/data/staff";
 import { mondayOf, today } from "@/lib/dates";
+import { makeQrToken } from "@/lib/ids";
 import { can, ROLE_LABEL, type Permission } from "@/lib/permissions";
-import { contentsFingerprint, generateSchedule, isExpired, lineBlockReason, reservedByBatch, sourceFingerprint, trayProgress, unitsByBatch } from "@/lib/tray-engine";
+import { enrolmentFor, invoiceTotals } from "@/lib/selectors";
+import {
+  contentsFingerprint, generateSchedule, isExpired, lineBlockReason, reservedByBatch, scheduleDiff, scheduleLines, sourceFingerprint, trayProgress, unitsByBatch,
+} from "@/lib/tray-engine";
 import type { AppData } from "@/types/state";
 import type {
-  Activity, ActivityKind, Batch, Compartment, DocumentType, Invoice, Medicine, Patient, PharmacySettings, Prescription,
-  PrescriptionLine, Role, Subscription, Tray, TrayDecision, TrayEvent,
+  Activity, ActivityKind, Batch, Compartment, Invoice, Medicine, Patient, PharmacySettings, Prescription, PrescriptionLine, Role, Subscription, Tray,
+  TrayDecision, TrayEvent,
 } from "@/types";
+import { fail, pass, type Ctx, type Result } from "./context";
+import { mdsActions, type MdsActions } from "./mds";
+import { operationsActions, type OperationsActions } from "./operations";
+import { orderActions, type OrderActions } from "./orders";
 
-export interface Result { ok: boolean; message: string; id?: string }
-const fail = (message: string): Result => ({ ok: false, message });
-const pass = (message: string, id?: string): Result => ({ ok: true, message, id });
+export type { Result } from "./context";
 
-export interface AppState extends AppData {
+export type PatientInput = Omit<Patient, "id" | "registeredOn" | "documents" | "qrToken" | "mdsStatus" | "createdInDemo"> & { id?: string };
+
+export interface AppState extends AppData, OrderActions, MdsActions, OperationsActions {
   role: Role;
   readNotifications: string[];
+  journeyScenario: string;
   journeyStep: number;
+  journeyProgress: Record<string, number>;
   journeyOpen: boolean;
   /** key -> journey step index at which the screen or tab was last visited */
   visits: Record<string, number>;
@@ -29,15 +37,17 @@ export interface AppState extends AppData {
   resetDemo(): void;
   setJourneyStep(step: number): void;
   setJourneyOpen(open: boolean): void;
+  setJourneyScenario(id: string): void;
   markVisit(key: string): void;
   markNotificationsRead(ids: string[]): void;
 
-  savePatient(p: Omit<Patient, "id" | "registeredOn" | "documents"> & { id?: string }): Result;
+  savePatient(p: PatientInput): Result;
 
   saveRx(input: RxInput, submit: boolean): Result;
   submitRx(id: string): Result;
   reviewRx(id: string, outcome: "verified" | "rejected", decisions: Record<string, { decision: TrayDecision; note?: string }>, note?: string): Result;
   discontinueRx(id: string, note: string): Result;
+  discontinueLine(rxId: string, lineId: string, note: string): Result;
 
   generateTray(patientId: string, weekStart: string): Result;
   approveSchedule(trayId: string): Result;
@@ -51,7 +61,8 @@ export interface AppState extends AppData {
   rejectTray(trayId: string, note: string): Result;
   requestCorrection(trayId: string, compartmentIds: string[], note: string): Result;
   resendForVerification(trayId: string): Result;
-  supplyTray(trayId: string): Result;
+  supplyTray(trayId: string, collectedBy?: string): Result;
+  deductTrayStock(trayId: string, by: string): Result;
   createReplacement(trayId: string): Result;
 
   saveMedicine(m: Omit<Medicine, "id"> & { id?: string }): Result;
@@ -63,7 +74,6 @@ export interface AppState extends AppData {
   saveSubscription(s: Omit<Subscription, "id"> & { id?: string }): Result;
 
   updateSettings(patch: Partial<PharmacySettings>): void;
-  logDocument(type: DocumentType, label: string, verb: "previewed" | "downloaded" | "printed", patientId?: string, trayId?: string): void;
 }
 
 export interface RxInput {
@@ -81,17 +91,21 @@ const uid = (prefix: string) => `${prefix}-${++counter}`;
 const nextNumber = (ids: string[], prefix: string, floor: number) =>
   `${prefix}-${Math.max(floor, ...ids.map((x) => Number(x.split("-")[1]) || 0)) + 1}`;
 
+const FINAL = ["supplied", "rejected", "cancelled"];
+const BASE = () => ({ role: "dispenser" as Role, readNotifications: [], journeyScenario: "A", journeyStep: 0, journeyProgress: {}, journeyOpen: true, visits: {} });
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => {
       const actor = () => staffFor(get().role);
       const allowed = (perm: Permission) => can(get().role, perm);
       const denied = (what: string) => fail(`${ROLE_LABEL[get().role]} cannot ${what} in this demo.`);
+      const now = () => new Date().toISOString();
 
       const log = (kind: ActivityKind, summary: string, refs: Partial<Activity> = {}) => {
         const a = actor();
-        const entry: Activity = { id: uid("AC"), at: new Date().toISOString(), actor: a.name, role: a.role, kind, summary, ...refs };
-        set((s) => ({ activity: [entry, ...s.activity].slice(0, 800) }));
+        const entry: Activity = { id: uid("AC"), at: now(), actor: a.name, role: a.role, kind, summary, ...refs };
+        set((s) => ({ activity: [entry, ...s.activity].slice(0, 1000) }));
       };
 
       const patientName = (id: string) => get().patients.find((p) => p.id === id)?.name ?? id;
@@ -103,57 +117,76 @@ export const useAppStore = create<AppState>()(
       });
       const trayEvent = (type: TrayEvent["type"], note?: string): TrayEvent => {
         const a = actor();
-        return { id: uid("EV"), at: new Date().toISOString(), by: a.name, role: a.role, type, note };
+        return { id: uid("EV"), at: now(), by: a.name, role: a.role, type, note };
       };
       const label = (t: Tray) => `${t.id} for ${patientName(t.patientId)}`;
 
       /**
-       * Runs after any prescription, medicine or tray-content change. An approval
-       * only stands while the tray and its sources match what was approved.
+       * Runs after any prescription, medicine, period or tray-content change. An
+       * approval only stands while the tray and its sources match what was
+       * approved. Planned and open weeks are flagged with what would change.
        */
       const revalidate = () => {
-        const { trays, prescriptions, medicines } = get();
-        const notes: { tray: Tray; reason: string }[] = [];
-        const next = trays.map((t) => {
-          if (t.status === "supplied" || t.status === "rejected") return t;
-          const source = sourceFingerprint(t.prescriptionIds, t.patientId, prescriptions, medicines);
+        const s = get();
+        const lost: { tray: Tray; reason: string }[] = [];
+        const flagged: { tray: Tray; diff: string[] }[] = [];
+        const next = s.trays.map((t) => {
+          if (FINAL.includes(t.status) || t.inventoryDeducted) return t;
+          const periods = enrolmentFor(s, t.patientId)?.approvedPeriods ?? [];
+          const source = sourceFingerprint(t.prescriptionIds, t.patientId, s.prescriptions, s.medicines, periods);
           const sourceChanged = source !== t.sourceFingerprint;
-          const contentChanged = t.status === "approved" && t.approvedFingerprint !== contentsFingerprint(t);
-          if (t.status === "approved" && (sourceChanged || contentChanged)) {
-            const reason = sourceChanged
-              ? "A source prescription or medicine changed after this tray was approved."
-              : "Tray contents changed after approval.";
+          const effective = t.status === "on-hold" ? t.heldFrom ?? t.status : t.status;
+          const wasApproved = effective === "approved" || effective === "ready";
+          const contentChanged = wasApproved && t.approvedFingerprint !== contentsFingerprint(t);
+          if (!sourceChanged && !contentChanged) return t;
+          let diff: string[] = [];
+          if (sourceChanged) {
+            const preview = generateSchedule({
+              patientId: t.patientId, weekStart: t.weekStart, trayId: t.id, prescriptions: s.prescriptions, medicines: s.medicines, batches: s.batches,
+              otherTrays: s.trays.filter((x) => x.id !== t.id), orders: s.orders, today: today(), approvedPeriods: periods, exclusions: t.exclusions.map((x) => x.lineId),
+            });
+            diff = scheduleDiff(t.compartments, preview.compartments, s.medicines);
+          }
+          if (wasApproved) {
+            const reason = sourceChanged ? "A source prescription, medicine or approved period changed after this tray was approved." : "Tray contents changed after approval.";
             const updated: Tray = {
-              ...t, status: "approval-invalidated", invalidatedReason: reason, needsRegeneration: sourceChanged,
+              ...t, status: "approval-invalidated", heldFrom: undefined, invalidatedReason: reason, needsRegeneration: sourceChanged,
+              pendingChanges: sourceChanged ? (diff.length ? diff : ["The source changed. The tray contents would stay the same, but the approval must be repeated."]) : undefined,
               approvedFingerprint: undefined, events: [...t.events, trayEvent("invalidated", reason)],
             };
-            notes.push({ tray: updated, reason });
+            lost.push({ tray: updated, reason });
             return updated;
           }
-          if (sourceChanged && !t.needsRegeneration) return { ...t, needsRegeneration: true };
-          return t;
+          // A new prescription version with identical doses still needs re-approval, so the tray links to the current version.
+          if (!diff.length) diff = ["The prescription was replaced by a new version. Doses and times are unchanged, but the week must be rebuilt and re-approved against the new version."];
+          if (t.needsRegeneration && JSON.stringify(t.pendingChanges) === JSON.stringify(diff)) return t;
+          const status = ["scheduled", "proposed"].includes(t.status) ? "awaiting-rx-validation" : t.status;
+          const updated: Tray = { ...t, status, needsRegeneration: true, pendingChanges: diff, events: [...t.events, trayEvent("change-flagged", diff.join("; "))] };
+          flagged.push({ tray: updated, diff });
+          return updated;
         });
         set({ trays: next });
-        notes.forEach((n) => log("verification", `${label(n.tray)}: approval invalidated. ${n.reason}`, { trayId: n.tray.id, patientId: n.tray.patientId }));
-        return notes.length;
+        lost.forEach((n) => log("verification", `${label(n.tray)}: approval invalidated. ${n.reason}`, { trayId: n.tray.id, patientId: n.tray.patientId }));
+        flagged.forEach((f) => log("mds", `${label(f.tray)}${f.tray.cycleWeek ? ` (week ${f.tray.cycleWeek})` : ""}: flagged for pharmacist review. ${f.diff.join("; ")}`, { trayId: f.tray.id, patientId: f.tray.patientId }));
+        return lost.length;
       };
+
+      const ctx: Ctx = { set, get, actor, allowed, denied, log, patientName, uid, nextNumber, revalidate, now };
+      const lostSuffix = (n: number) => (n ? ` ${n} approved tray${n > 1 ? "s" : ""} lost approval.` : "");
 
       return {
         ...buildSeed(),
-        role: "dispenser",
-        readNotifications: [],
-        journeyStep: 0,
-        journeyOpen: true,
-        visits: {},
+        ...BASE(),
 
         setRole(role) {
           set({ role });
         },
         resetDemo() {
-          set({ ...buildSeed(), role: "dispenser", readNotifications: [], journeyStep: 0, journeyOpen: true, visits: {} });
+          set({ ...buildSeed(), ...BASE() });
         },
-        setJourneyStep: (journeyStep) => set({ journeyStep }),
+        setJourneyStep: (journeyStep) => set((s) => ({ journeyStep, journeyProgress: { ...s.journeyProgress, [s.journeyScenario]: journeyStep } })),
         setJourneyOpen: (journeyOpen) => set({ journeyOpen }),
+        setJourneyScenario: (id) => set((s) => ({ journeyScenario: id, journeyStep: s.journeyProgress[id] ?? 0, journeyOpen: true })),
         markVisit: (key) => set((s) => (s.visits[key] === s.journeyStep ? s : { visits: { ...s.visits, [key]: s.journeyStep } })),
         markNotificationsRead: (ids) => set((s) => ({ readNotifications: [...new Set([...s.readNotifications, ...ids])] })),
 
@@ -164,17 +197,22 @@ export const useAppStore = create<AppState>()(
             log("patient", `Updated details for ${input.name}`, { patientId: input.id });
             return pass(`Saved ${input.name}`, input.id);
           }
-          const id = nextNumber(get().patients.map((p) => p.id), "PT", 1000);
-          const patient: Patient = { ...input, id, registeredOn: today(), documents: [] };
-          set((s) => ({ patients: [patient, ...s.patients] }));
-          log("patient", `Registered ${input.name} (${id})`, { patientId: id });
-          return pass(`Added ${input.name}`, id);
+          const s = get();
+          const dup = s.patients.find((p) => p.name.trim().toLowerCase() === input.name.trim().toLowerCase() && p.dob === input.dob);
+          if (dup) return fail(`${dup.name} (${dup.id}) with this date of birth is already registered. Open that record instead.`);
+          const id = nextNumber(s.patients.map((p) => p.id), "PT", 1000);
+          let qrToken = makeQrToken();
+          while (s.patients.some((p) => p.qrToken === qrToken)) qrToken = makeQrToken();
+          const patient: Patient = { ...input, id, qrToken, mdsStatus: "none", registeredOn: today(), documents: [], createdInDemo: true };
+          set({ patients: [patient, ...s.patients] });
+          log("patient", `Registered ${input.name} (${id}). Permanent ID and QR code issued`, { patientId: id });
+          return pass(`Registered ${input.name} as ${id}`, id);
         },
 
         saveRx(input, submit) {
           if (!allowed("rx.enter")) return denied("enter prescriptions");
           const a = actor();
-          const now = new Date().toISOString();
+          const at = now();
           const lines: PrescriptionLine[] = input.lines.map((l) => ({ ...l, id: uid("LN"), trayDecision: "undecided" }));
           const status = submit ? "pending" : "draft";
           const action = submit ? "Submitted for review" : "Saved draft";
@@ -185,7 +223,7 @@ export const useAppStore = create<AppState>()(
             set((s) => ({
               prescriptions: s.prescriptions.map((p) =>
                 p.id === input.id
-                  ? { ...p, ...input, id: p.id, lines, status, review: undefined, history: [...p.history, { at: now, by: a.name, role: a.role, action }] }
+                  ? { ...p, ...input, id: p.id, lines, status, review: undefined, history: [...p.history, { at, by: a.name, role: a.role, action }] }
                   : p,
               ),
             }));
@@ -197,10 +235,10 @@ export const useAppStore = create<AppState>()(
           const rx: Prescription = {
             id, patientId: input.patientId, prescriber: input.prescriber, clinic: input.clinic, issuedOn: input.issuedOn,
             status, lines, version: (previous?.version ?? 0) + 1, supersedes: input.supersedes, createdBy: a.name,
-            history: [{ at: now, by: a.name, role: a.role, action: previous ? `${action} (amends ${previous.id})` : action }],
+            history: [{ at, by: a.name, role: a.role, action: previous ? `${action} (amends ${previous.id})` : action }],
           };
           set((s) => ({ prescriptions: [rx, ...s.prescriptions] }));
-          log("prescription", `${id} for ${patientName(input.patientId)}: ${action.toLowerCase()}`, { patientId: input.patientId, prescriptionId: id });
+          log("prescription", `${id} for ${patientName(input.patientId)}: ${action.toLowerCase()}${previous ? `, amends ${previous.id}` : ""}`, { patientId: input.patientId, prescriptionId: id });
           return pass(submit ? `Submitted ${id} for review` : `Saved ${id} as a draft`, id);
         },
 
@@ -211,7 +249,7 @@ export const useAppStore = create<AppState>()(
           if (!rx || rx.status !== "draft") return fail("Only a draft can be submitted.");
           set((s) => ({
             prescriptions: s.prescriptions.map((p) =>
-              p.id === id ? { ...p, status: "pending", history: [...p.history, { at: new Date().toISOString(), by: a.name, role: a.role, action: "Submitted for review" }] } : p,
+              p.id === id ? { ...p, status: "pending", history: [...p.history, { at: now(), by: a.name, role: a.role, action: "Submitted for review" }] } : p,
             ),
           }));
           log("prescription", `${id} for ${patientName(rx.patientId)}: submitted for review`, { patientId: rx.patientId, prescriptionId: id });
@@ -221,7 +259,8 @@ export const useAppStore = create<AppState>()(
         reviewRx(id, outcome, decisions, note) {
           if (!allowed("rx.review")) return denied("review prescriptions");
           const a = actor();
-          const rx = get().prescriptions.find((p) => p.id === id);
+          const s = get();
+          const rx = s.prescriptions.find((p) => p.id === id);
           if (!rx || rx.status !== "pending") return fail("Only a prescription pending review can be reviewed.");
           const lines = rx.lines.map((l) => {
             const d = decisions[l.id];
@@ -229,19 +268,19 @@ export const useAppStore = create<AppState>()(
           });
           if (outcome === "rejected" && !note?.trim()) return fail("Add a reason before rejecting this prescription.");
           if (outcome === "verified") {
-            const meds = get().medicines;
+            const periods = enrolmentFor(s, rx.patientId)?.approvedPeriods ?? [];
             for (const l of lines) {
-              const med = meds.find((m) => m.id === l.medicineId);
+              const med = s.medicines.find((m) => m.id === l.medicineId);
               if (l.trayDecision === "undecided") return fail(`Choose a tray decision for ${med?.brand ?? "every line"} first.`);
               if (l.trayDecision === "include") {
-                const reason = lineBlockReason(l, med);
-                if (reason) return fail(`${med?.brand}: ${reason} Keep this line out of the tray or reject the prescription.`);
+                const reason = lineBlockReason(l, med, periods);
+                if (reason) return fail(`${med?.brand}: ${reason} Keep this line out of the tray, approve the period on the MDS enrolment, or reject the prescription.`);
               }
             }
           }
-          const at = new Date().toISOString();
-          set((s) => ({
-            prescriptions: s.prescriptions.map((p) => {
+          const at = now();
+          set((st) => ({
+            prescriptions: st.prescriptions.map((p) => {
               if (p.id === id) {
                 return {
                   ...p, lines, status: outcome,
@@ -252,16 +291,16 @@ export const useAppStore = create<AppState>()(
               if (outcome === "verified" && p.id === rx.supersedes && p.status === "verified") {
                 return {
                   ...p, status: "discontinued" as const, supersededBy: id,
-                  history: [...p.history, { at, by: a.name, role: a.role, action: `Discontinued. Replaced by ${id}` }],
+                  history: [...p.history, { at, by: a.name, role: a.role, action: `Discontinued. Replaced by ${id}. Earlier version kept` }],
                 };
               }
               return p;
             }),
           }));
           log("prescription", `${id} for ${patientName(rx.patientId)}: ${outcome === "verified" ? "verified" : "rejected"}${note ? `. ${note}` : ""}`, { patientId: rx.patientId, prescriptionId: id });
-          const invalidated = revalidate();
-          const suffix = invalidated ? ` ${invalidated} approved tray${invalidated > 1 ? "s" : ""} lost approval.` : "";
-          return pass(`${outcome === "verified" ? "Verified" : "Rejected"} ${id}.${suffix}`);
+          const lostN = revalidate();
+          const flagged = get().trays.filter((t) => t.patientId === rx.patientId && t.needsRegeneration && !FINAL.includes(t.status)).length;
+          return pass(`${outcome === "verified" ? "Verified" : "Rejected"} ${id}.${lostSuffix(lostN)}${flagged && !lostN ? ` ${flagged} week${flagged > 1 ? "s" : ""} flagged for review.` : ""}`);
         },
 
         discontinueRx(id, note) {
@@ -269,55 +308,85 @@ export const useAppStore = create<AppState>()(
           const a = actor();
           const rx = get().prescriptions.find((p) => p.id === id);
           if (!rx) return fail("Prescription not found.");
-          const at = new Date().toISOString();
           set((s) => ({
             prescriptions: s.prescriptions.map((p) =>
-              p.id === id ? { ...p, status: "discontinued", history: [...p.history, { at, by: a.name, role: a.role, action: "Discontinued prescription", note }] } : p,
+              p.id === id ? { ...p, status: "discontinued", history: [...p.history, { at: now(), by: a.name, role: a.role, action: "Discontinued prescription", note }] } : p,
             ),
           }));
           log("prescription", `${id} for ${patientName(rx.patientId)}: discontinued${note ? `. ${note}` : ""}`, { patientId: rx.patientId, prescriptionId: id });
-          const invalidated = revalidate();
-          return pass(`Discontinued ${id}.${invalidated ? ` ${invalidated} approved tray${invalidated > 1 ? "s" : ""} lost approval.` : ""}`);
+          return pass(`Discontinued ${id}.${lostSuffix(revalidate())}`);
+        },
+
+        discontinueLine(rxId, lineId, note) {
+          if (!allowed("rx.review")) return denied("discontinue medicines");
+          const s = get();
+          const rx = s.prescriptions.find((p) => p.id === rxId);
+          if (!rx || rx.status !== "verified") return fail("Only a medicine on a verified prescription can be discontinued.");
+          const line = rx.lines.find((l) => l.id === lineId);
+          if (!line) return fail("Medicine not found on this prescription.");
+          if (!note.trim()) return fail("Add a reason.");
+          const med = s.medicines.find((m) => m.id === line.medicineId);
+          if (rx.lines.length === 1) return get().discontinueRx(rxId, `${med?.brand} discontinued. ${note}`);
+          const a = actor();
+          const at = now();
+          const id = nextNumber(s.prescriptions.map((p) => p.id), "RX", 2000);
+          const next: Prescription = {
+            ...rx, id, version: rx.version + 1, supersedes: rx.id, supersededBy: undefined, createdBy: a.name, status: "verified",
+            lines: rx.lines.filter((l) => l.id !== lineId).map((l) => ({ ...l, id: uid("LN") })),
+            review: { by: a.name, at, outcome: "verified", note: `${med?.brand} discontinued. ${note}` },
+            history: [{ at, by: a.name, role: a.role, action: `Created by pharmacist to discontinue ${med?.brand} (amends ${rx.id})`, note }, { at, by: a.name, role: a.role, action: "Verified prescription" }],
+          };
+          set((st) => ({
+            prescriptions: [next, ...st.prescriptions.map((p) => (p.id === rxId ? { ...p, status: "discontinued" as const, supersededBy: id, history: [...p.history, { at, by: a.name, role: a.role, action: `Replaced by ${id}: ${med?.brand} discontinued. Earlier version kept`, note }] } : p))],
+          }));
+          log("prescription", `${med?.brand} discontinued for ${patientName(rx.patientId)}. ${rx.id} replaced by ${id}. ${note}`, { patientId: rx.patientId, prescriptionId: id });
+          return pass(`Discontinued ${med?.brand}. ${id} replaces ${rx.id}.${lostSuffix(revalidate())}`, id);
         },
 
         generateTray(patientId, weekStart) {
           if (!allowed("tray.generate")) return denied("generate schedules");
           const state = get();
-          const existing = state.trays.find(
-            (t) => t.patientId === patientId && t.weekStart === weekStart && t.status !== "rejected" && t.status !== "supplied",
-          );
-          if (existing && !["proposed", "awaiting-preparation", "in-preparation", "correction-requested", "approval-invalidated", "awaiting-verification"].includes(existing.status)) {
-            return fail(`${existing.id} is already approved for this week. Supply it or wait for its approval to be invalidated.`);
+          const enrol = enrolmentFor(state, patientId);
+          if (!enrol || enrol.status !== "active") return fail(enrol?.status === "pending-review" ? "The MDS enrolment is waiting for the pharmacist's suitability review." : enrol?.status === "suspended" ? "This patient's MDS service is suspended." : "Enrol the patient for MDS before generating a tray.");
+          const OPEN = ["scheduled", "awaiting-rx-validation", "proposed", "awaiting-preparation", "in-preparation", "correction-requested", "approval-invalidated", "awaiting-verification"];
+          const existing = state.trays.find((t) => t.patientId === patientId && t.weekStart === weekStart && !FINAL.includes(t.status));
+          if (existing && !OPEN.includes(existing.status)) {
+            return fail(`${existing.id} is ${existing.status === "on-hold" ? "on hold" : "already approved"} for this week.`);
           }
           const supplied = state.trays.find((t) => t.patientId === patientId && t.weekStart === weekStart && t.status === "supplied");
-          if (supplied) return fail(`${supplied.id} has already been supplied for this week. Create a replacement tray instead.`);
+          if (supplied && !existing) return fail(`${supplied.id} has already been supplied for this week. Create a replacement tray instead.`);
+          const pending = state.prescriptions.filter((p) => p.patientId === patientId && p.status === "pending" && p.supersedes && existing?.prescriptionIds.includes(p.supersedes));
+          if (pending.length) return fail(`${pending.map((p) => p.id).join(", ")} amends a prescription this tray uses and is still pending. Validate it first.`);
+          if (!state.prescriptions.some((p) => p.patientId === patientId && p.status === "verified")) return fail("This patient has no verified prescription. Verify one before generating a schedule.");
 
           const trayId = existing?.id ?? `TRY-${1000 + state.trays.reduce((m, t) => Math.max(m, Number(t.id.split("-")[1]) - 1000), 0) + 1}`;
           const sched = generateSchedule({
-            patientId, weekStart, trayId,
-            prescriptions: state.prescriptions, medicines: state.medicines, batches: state.batches,
-            otherTrays: state.trays.filter((t) => t.id !== trayId), today: today(),
+            patientId, weekStart, trayId, prescriptions: state.prescriptions, medicines: state.medicines, batches: state.batches,
+            otherTrays: state.trays.filter((t) => t.id !== trayId), orders: state.orders, today: today(), approvedPeriods: enrol.approvedPeriods,
+            exclusions: existing?.exclusions.map((x) => x.lineId),
           });
-          const anyVerified = state.prescriptions.some((p) => p.patientId === patientId && p.status === "verified");
-          if (!anyVerified) return fail("This patient has no verified prescription. Verify one before generating a schedule.");
           if (!sched.compartments.some((c) => c.items.length)) {
             return fail("No line on the verified prescriptions can go in a tray for this week. Review the kept-out lines first.");
           }
-          const fingerprint = sourceFingerprint(sched.prescriptionIds, patientId, state.prescriptions, state.medicines);
-          const event = trayEvent("generated", existing ? "Regenerated from the current verified prescriptions." : undefined);
+          const fingerprint = sourceFingerprint(sched.prescriptionIds, patientId, state.prescriptions, state.medicines, enrol.approvedPeriods);
           if (existing) {
+            const before = scheduleLines(existing.compartments, state.medicines);
+            const reason = existing.pendingChanges?.length ? `Rebuilt after a prescription change: ${existing.pendingChanges.join("; ")}` : "Regenerated from the current verified prescriptions.";
             patchTray(existing.id, (t) => ({
-              ...t, ...sched, status: "proposed", sourceFingerprint: fingerprint, needsRegeneration: false,
-              invalidatedReason: undefined, approvedFingerprint: undefined, events: [...t.events, event], createdInDemo: true,
+              ...t, ...sched, status: "proposed", sourceFingerprint: fingerprint, needsRegeneration: false, pendingChanges: undefined,
+              invalidatedReason: undefined, approvedFingerprint: undefined, createdInDemo: true,
+              revisions: before.length ? [...t.revisions, { id: uid("REV"), at: now(), by: actor().name, reason, lines: before, prescriptionIds: t.prescriptionIds, statusBefore: t.status }] : t.revisions,
+              events: [...t.events, trayEvent("generated", `${reason} Previous version kept. Needs pharmacist approval.`)],
             }));
           } else {
             const tray: Tray = {
               id: trayId, patientId, weekStart, type: "standard", status: "proposed", ...sched,
-              sourceFingerprint: fingerprint, events: [event], inventoryDeducted: false, createdInDemo: true,
+              sourceFingerprint: fingerprint, events: [trayEvent("generated")], inventoryDeducted: false, createdInDemo: true, revisions: [], exclusions: [],
+              fulfilment: { method: enrol.fulfilment },
             };
             set((s) => ({ trays: [tray, ...s.trays] }));
           }
-          log("tray", `${trayId} for ${patientName(patientId)}: generated a proposed schedule`, { trayId, patientId });
+          log("tray", `${trayId} for ${patientName(patientId)}: ${existing ? "regenerated" : "generated"} a proposed schedule`, { trayId, patientId });
           const placed = sched.compartments.filter((c) => c.items.length).length;
           return pass(`Proposed ${placed} compartments${sched.flags.length ? `. ${sched.flags.length} line${sched.flags.length > 1 ? "s" : ""} left out for review` : ""}`, trayId);
         },
@@ -325,10 +394,10 @@ export const useAppStore = create<AppState>()(
         approveSchedule(trayId) {
           if (!allowed("tray.approveSchedule")) return denied("approve schedules");
           const t = getTray(trayId);
-          if (!t || t.status !== "proposed") return fail("Only a proposed schedule can be approved.");
+          if (!t || t.status !== "proposed") return fail("Only a schedule awaiting clinical suitability review can be approved.");
           if (t.needsRegeneration) return fail("A prescription changed. Regenerate the schedule first.");
-          patchTray(trayId, (x) => ({ ...x, status: "awaiting-preparation", events: [...x.events, trayEvent("schedule-approved")] }));
-          log("tray", `${label(t)}: approved the proposed schedule`, { trayId, patientId: t.patientId });
+          patchTray(trayId, (x) => ({ ...x, status: "awaiting-preparation", events: [...x.events, trayEvent("schedule-approved", x.cycleWeek ? `Week ${x.cycleWeek} only. Other weeks keep their own approval.` : undefined)] }));
+          log("tray", `${label(t)}: approved the proposed schedule${t.cycleWeek ? ` for week ${t.cycleWeek} only` : ""}`, { trayId, patientId: t.patientId });
           return pass("Approved the schedule. Stock is reserved and the tray is ready to prepare.");
         },
 
@@ -350,8 +419,9 @@ export const useAppStore = create<AppState>()(
           if (c.status === "discrepancy") return fail("Resolve the discrepancy on this compartment first.");
           const a = actor();
           patchTray(trayId, (x) => ({
-            ...patchCompartment(x, cid, (y) => ({ ...y, status: "prepared", preparedBy: a.name, preparedAt: new Date().toISOString(), correctionNote: undefined })),
+            ...patchCompartment(x, cid, (y) => ({ ...y, status: "prepared", preparedBy: a.name, preparedAt: now(), correctionNote: undefined })),
             status: x.status === "correction-requested" ? x.status : "in-preparation",
+            assignedTo: x.assignedTo ?? a.name,
           }));
           return pass("Marked prepared");
         },
@@ -370,7 +440,7 @@ export const useAppStore = create<AppState>()(
           if (!t) return fail("Tray not found.");
           const a = actor();
           patchTray(trayId, (x) => ({
-            ...patchCompartment(x, cid, (y) => ({ ...y, status: "discrepancy", discrepancy: { note, by: a.name, at: new Date().toISOString() } })),
+            ...patchCompartment(x, cid, (y) => ({ ...y, status: "discrepancy", discrepancy: { note, by: a.name, at: now() } })),
             status: x.status === "awaiting-preparation" ? "in-preparation" : x.status,
           }));
           const c = t.compartments.find((x) => x.id === cid)!;
@@ -390,7 +460,7 @@ export const useAppStore = create<AppState>()(
         changeBatch(trayId, cid, itemId, batchId) {
           if (!allowed("tray.prepare") && !allowed("tray.verify")) return denied("change batches");
           const t = getTray(trayId);
-          if (!t || t.status === "supplied" || t.status === "rejected") return fail("This tray can no longer be changed.");
+          if (!t || FINAL.includes(t.status) || t.inventoryDeducted) return fail("This tray can no longer be changed.");
           const batch = get().batches.find((b) => b.id === batchId);
           if (!batch) return fail("Batch not found.");
           if (isExpired(batch, today())) return fail(`Batch ${batch.batchNumber} has expired.`);
@@ -463,12 +533,10 @@ export const useAppStore = create<AppState>()(
           return pass("Sent back for verification");
         },
 
-        supplyTray(trayId) {
-          if (!allowed("tray.supply")) return denied("supply trays");
+        deductTrayStock(trayId, by) {
           const t = getTray(trayId);
           if (!t) return fail("Tray not found.");
-          if (t.inventoryDeducted || t.status === "supplied") return fail("This tray has already been supplied. Stock was not deducted again.");
-          if (t.status !== "approved") return fail("Only an approved tray can be supplied.");
+          if (t.inventoryDeducted) return pass("Stock was already deducted for this tray. Nothing changed.");
           if (t.approvedFingerprint !== contentsFingerprint(t)) return fail("Tray contents differ from what was approved.");
           const units = unitsByBatch(t);
           const { batches } = get();
@@ -476,24 +544,38 @@ export const useAppStore = create<AppState>()(
             const b = batches.find((x) => x.id === batchId);
             if (!b || b.available < qty) return fail(`Batch ${b?.batchNumber ?? batchId} has ${b?.available ?? 0} units but the tray needs ${qty}. Add stock first.`);
           }
-          const a = actor();
-          const at = new Date().toISOString();
+          const at = now();
           set((s) => ({
             batches: s.batches.map((b) => (units[b.id] ? { ...b, available: b.available - units[b.id] } : b)),
             movements: [
               ...Object.entries(units).map(([batchId, qty]) => ({
                 id: uid("MV"), at, batchId, medicineId: s.batches.find((b) => b.id === batchId)!.medicineId,
-                type: "dispensed" as const, qty: -qty, reference: trayId, by: a.name,
+                type: "dispensed" as const, qty: -qty, reference: trayId, by,
               })),
               ...s.movements,
             ],
-            trays: s.trays.map((x) =>
-              x.id === trayId ? { ...x, status: "supplied", inventoryDeducted: true, suppliedAt: at, events: [...x.events, trayEvent("supplied")] } : x,
-            ),
+            trays: s.trays.map((x) => (x.id === trayId ? { ...x, inventoryDeducted: true } : x)),
           }));
           const total = Object.values(units).reduce((n, v) => n + v, 0);
-          log("tray", `${label(t)}: marked the tray supplied. Deducted ${total} units from stock`, { trayId, patientId: t.patientId });
-          return pass(`Marked supplied. Deducted ${total} units from stock.`);
+          log("inventory", `${label(t)}: deducted ${total} units from stock`, { trayId, patientId: t.patientId });
+          return pass(`Deducted ${total} units`);
+        },
+
+        supplyTray(trayId, collectedBy) {
+          if (!allowed("tray.supply")) return denied("supply trays");
+          const t = getTray(trayId);
+          if (!t) return fail("Tray not found.");
+          if (t.status === "supplied") return fail("This tray has already been supplied. Stock was not deducted again.");
+          if (t.status !== "approved" && t.status !== "ready") return fail("Only an approved tray can be handed over.");
+          if (t.status === "ready" && t.fulfilment?.method === "delivery") return fail("This tray is going out for delivery. Complete it from Collection and Delivery.");
+          const before = get().batches.reduce((n, b) => n + b.available, 0);
+          const r = get().deductTrayStock(trayId, actor().name);
+          if (!r.ok) return r;
+          const total = before - get().batches.reduce((n, b) => n + b.available, 0);
+          const who = collectedBy?.trim() || "Patient";
+          patchTray(trayId, (x) => ({ ...x, status: "supplied", suppliedAt: now(), fulfilment: { ...(x.fulfilment ?? { method: "collection" }), collectedBy: who }, events: [...x.events, trayEvent("supplied", `Collected by ${who}`)] }));
+          log("tray", `${label(t)}: completed. Collected by ${who}. Deducted ${total} units from stock`, { trayId, patientId: t.patientId });
+          return pass(`Completed. Deducted ${total} units from stock.`);
         },
 
         createReplacement(trayId) {
@@ -501,21 +583,23 @@ export const useAppStore = create<AppState>()(
           const state = get();
           const t = state.trays.find((x) => x.id === trayId);
           if (!t) return fail("Tray not found.");
-          const open = state.trays.find((x) => x.replacementOf === trayId && x.status !== "rejected" && x.status !== "supplied");
+          const open = state.trays.find((x) => x.replacementOf === trayId && !FINAL.includes(x.status));
           if (open) return fail(`${open.id} is already the open replacement for this tray.`);
           const id = `TRY-${1000 + state.trays.reduce((m, x) => Math.max(m, Number(x.id.split("-")[1]) - 1000), 0) + 1}`;
+          const periods = enrolmentFor(state, t.patientId)?.approvedPeriods ?? [];
           const sched = generateSchedule({
             patientId: t.patientId, weekStart: t.weekStart, trayId: id,
             prescriptions: state.prescriptions, medicines: state.medicines, batches: state.batches,
-            otherTrays: state.trays, today: today(),
+            otherTrays: state.trays, orders: state.orders, today: today(), approvedPeriods: periods,
           });
           if (!sched.compartments.some((c) => c.items.length)) return fail("No verified lines can go in a replacement tray.");
           const tray: Tray = {
             id, patientId: t.patientId, weekStart: t.weekStart, type: "replacement", replacementOf: trayId, status: "proposed", ...sched,
-            sourceFingerprint: sourceFingerprint(sched.prescriptionIds, t.patientId, state.prescriptions, state.medicines),
-            events: [trayEvent("replacement-created", `Replaces ${trayId}`)], inventoryDeducted: false, createdInDemo: true,
+            sourceFingerprint: sourceFingerprint(sched.prescriptionIds, t.patientId, state.prescriptions, state.medicines, periods),
+            events: [trayEvent("replacement-created", `Replaces ${trayId}`)], inventoryDeducted: false, createdInDemo: true, revisions: [], exclusions: [],
+            cycleId: t.cycleId, cycleWeek: t.cycleWeek, fulfilment: t.fulfilment ? { method: t.fulfilment.method } : undefined,
           };
-          set((s) => ({ trays: [tray, ...s.trays] }));
+          set((s) => ({ trays: [tray, ...s.trays], cycles: t.cycleId ? s.cycles.map((c) => (c.id === t.cycleId ? { ...c, trayIds: c.trayIds.map((x) => (x === trayId ? id : x)) } : c)) : s.cycles }));
           log("tray", `${id} for ${patientName(t.patientId)}: created a replacement for ${trayId}`, { trayId: id, patientId: t.patientId });
           return pass(`Created replacement ${id}. The pharmacist approves its schedule next.`, id);
         },
@@ -525,8 +609,7 @@ export const useAppStore = create<AppState>()(
           if (input.id) {
             set((s) => ({ medicines: s.medicines.map((m) => (m.id === input.id ? { ...m, ...input, id: m.id } : m)) }));
             log("system", `Updated catalogue entry ${input.brand}`);
-            const invalidated = revalidate();
-            return pass(`Saved ${input.brand}.${invalidated ? ` ${invalidated} approved tray${invalidated > 1 ? "s" : ""} lost approval.` : ""}`, input.id);
+            return pass(`Saved ${input.brand}.${lostSuffix(revalidate())}`, input.id);
           }
           const id = nextNumber(get().medicines.map((m) => m.id), "MED", 0).replace(/-(\d+)$/, (_, n) => `-${String(n).padStart(3, "0")}`);
           set((s) => ({ medicines: [{ ...input, id, isUserAdded: true }, ...s.medicines] }));
@@ -545,7 +628,7 @@ export const useAppStore = create<AppState>()(
           const batch: Batch = { ...b, id, manufacturer: med.manufacturer, receivedOn: today() };
           set((s) => ({
             batches: [batch, ...s.batches],
-            movements: [{ id: uid("MV"), at: new Date().toISOString(), batchId: id, medicineId: b.medicineId, type: "received", qty: b.available, reference: "Add stock", by: a.name }, ...s.movements],
+            movements: [{ id: uid("MV"), at: now(), batchId: id, medicineId: b.medicineId, type: "received", qty: b.available, reference: "Stock receipt (manual)", by: a.name }, ...s.movements],
           }));
           log("inventory", `Received ${b.available} units of ${med.brand}, batch ${b.batchNumber}`);
           return pass(`Added batch ${b.batchNumber}`, id);
@@ -556,17 +639,17 @@ export const useAppStore = create<AppState>()(
           const b = get().batches.find((x) => x.id === id);
           if (!b) return fail("Batch not found.");
           if (patch.available < 0) return fail("Quantity cannot be negative.");
-          const reserved = reservedByBatch(get().trays)[id] ?? 0;
-          if (patch.available < reserved) return fail(`${reserved} units are reserved for trays. Quantity cannot go below that.`);
+          const reserved = reservedByBatch(get().trays, get().orders)[id] ?? 0;
+          if (patch.available < reserved) return fail(`${reserved} units are reserved for trays and orders. Quantity cannot go below that.`);
           const delta = patch.available - b.available;
           const a = actor();
           set((s) => ({
             batches: s.batches.map((x) => (x.id === id ? { ...x, available: patch.available, expiryDate: patch.expiryDate, location: patch.location } : x)),
             movements: delta
-              ? [{ id: uid("MV"), at: new Date().toISOString(), batchId: id, medicineId: b.medicineId, type: "adjusted", qty: delta, reference: patch.reason || "Manual edit", by: a.name }, ...s.movements]
+              ? [{ id: uid("MV"), at: now(), batchId: id, medicineId: b.medicineId, type: "adjusted", qty: delta, reference: patch.reason || "Manual edit", by: a.name }, ...s.movements]
               : s.movements,
           }));
-          log("inventory", `Edited batch ${b.batchNumber}${delta ? `, quantity ${delta > 0 ? "+" : ""}${delta}` : ""}`);
+          log("inventory", `Adjusted batch ${b.batchNumber}${delta ? `, quantity ${delta > 0 ? "+" : ""}${delta}` : ""}. ${patch.reason}`);
           return pass(`Saved batch ${b.batchNumber}`);
         },
 
@@ -578,8 +661,8 @@ export const useAppStore = create<AppState>()(
             return pass(`Saved ${input.id}`, input.id);
           }
           const id = nextNumber(get().invoices.map((i) => i.id), "INV", 3000);
-          set((s) => ({ invoices: [{ ...input, id }, ...s.invoices] }));
-          log("billing", `Created sample invoice ${id} for ${patientName(input.patientId)}`, { patientId: input.patientId });
+          set((s) => ({ invoices: [{ payments: [], ...input, id }, ...s.invoices] }));
+          log("billing", `Created sample invoice ${id} for ${patientName(input.patientId)}${input.ownMedicinesDeclared ? " (service only, own medicines declared)" : ""}`, { patientId: input.patientId });
           return pass(`Created ${id}`, id);
         },
 
@@ -587,9 +670,13 @@ export const useAppStore = create<AppState>()(
           if (!allowed("billing.edit")) return denied("change invoices");
           const inv = get().invoices.find((i) => i.id === id);
           if (!inv) return fail("Invoice not found.");
+          if (status === "paid") {
+            const t = invoiceTotals(inv);
+            return get().recordInvoicePayment(id, t.balance, "Cash");
+          }
           set((s) => ({ invoices: s.invoices.map((i) => (i.id === id ? { ...i, status } : i)) }));
           log("billing", `Recorded ${id} as ${status} (simulated)`, { patientId: inv.patientId });
-          return pass(`Recorded ${id} as ${status}. No payment was processed.`);
+          return pass(`Recorded ${id} as ${status}.`);
         },
 
         saveSubscription(input) {
@@ -609,13 +696,15 @@ export const useAppStore = create<AppState>()(
           set((s) => ({ settings: { ...s.settings, ...patch } }));
         },
 
-        logDocument(type, docLabel, verb, patientId, trayId) {
-          log("document", `${docLabel} ${verb}${patientId ? ` for ${patientName(patientId)}` : ""}`, { documentType: type, patientId, trayId });
-        },
+        ...orderActions(ctx),
+        ...mdsActions(ctx),
+        ...operationsActions(ctx),
       };
     },
     {
-      name: "marina-care-demo-v1",
+      // v2: the client-feedback release adds dispensing, enrolment and cycles. Older v1 data is left behind, not migrated.
+      name: "marina-care-demo-v2",
+      version: 2,
       storage: createJSONStorage(() => localStorage),
     },
   ),

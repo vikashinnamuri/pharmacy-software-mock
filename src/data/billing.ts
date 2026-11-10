@@ -14,9 +14,17 @@ const inv = (n: number, patientId: string, daysAgo: number, status: InvoiceStatu
   lines,
 });
 
+/** Paid sample invoices get one simulated payment so the payment history adds up. */
+const withPayments = (list: Invoice[]): Invoice[] =>
+  list.map((i, n) => {
+    if (i.status !== "paid") return { ...i, payments: [] };
+    const total = i.lines.reduce((t, l) => t + l.qty * l.unitPrice * (1 + l.gstRate / 100), 0);
+    return { ...i, payments: [{ id: `PAY-${i.id}`, at: `${addDays(i.issuedOn, 1)}T14:30:00.000Z`, amount: Math.round(total * 100) / 100, kind: "payment" as const, method: n % 2 ? "UPI" as const : "Cash" as const, by: "Meena K. (demo)", note: "Simulated payment" }] };
+  });
+
 export const buildInvoices = (): Invoice[] => {
   seq = 0;
-  return [
+  return withPayments([
     inv(1, "PT-1001", 150, "paid", [svc("Monthly tray service", 1, 1200), med("Glucora 500 mg", "MED-001", 60, 2.4)]),
     inv(2, "PT-1002", 128, "paid", [svc("Monthly tray service", 1, 1200), med("Cardivan 50 mg", "MED-004", 30, 4.6), med("Plavira 75 mg", "MED-011", 30, 6.4)]),
     inv(3, "PT-1003", 110, "paid", [svc("Weekly tray service", 4, 350), med("Glucora 500 mg", "MED-001", 84, 2.4)]),
@@ -29,7 +37,7 @@ export const buildInvoices = (): Invoice[] => {
     inv(10, "PT-1012", 6, "paid", [med("Moxilin 500 mg", "MED-025", 15, 4.8), med("Feverol 500 mg", "MED-015", 20, 0.6)]),
     inv(11, "PT-1014", 4, "issued", [med("Airolin 100 mcg", "MED-023", 1, 165)]),
     inv(12, "PT-1001", 2, "draft", [svc("Delivery to home", 1, 80), svc("Monthly tray service", 1, 1200)]),
-  ];
+  ]);
 };
 
 const sub = (n: number, patientId: string, plan: Subscription["plan"], status: Subscription["status"], renewIn: number, startedAgo: number): Subscription => ({

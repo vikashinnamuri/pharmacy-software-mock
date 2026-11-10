@@ -5,7 +5,6 @@ const EDGE = "rgba(18,38,74,.28)";
 /** Illustrated placeholder for a medicine. Never a photograph of a real product. */
 export function PillArt({ medicine, size = 40, className }: { medicine: Pick<Medicine, "pill" | "imageDataUrl" | "brand">; size?: number; className?: string }) {
   if (medicine.imageDataUrl) {
-    // eslint-disable-next-line @next/next/no-img-element
     return <img src={medicine.imageDataUrl} alt={`${medicine.brand} sample`} width={size} height={size} className={className} style={{ width: size, height: size, objectFit: "contain", borderRadius: 6 }} />;
   }
   const { shape, color, color2, scored } = medicine.pill;

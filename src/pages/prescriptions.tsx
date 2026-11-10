@@ -1,6 +1,5 @@
-"use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useNavigate, useSearchParams } from "react-router";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Ban, Eye, FilePen, Plus, Send, Stethoscope } from "lucide-react";
@@ -12,7 +11,7 @@ import { RxBadge } from "@/components/common/status-badge";
 import { Card, ClinicalNotice, ConfirmDialog, GuardedButton, notify, PageHeader, Pick, SearchInput, TextLink } from "@/components/common/ui";
 import { RxForm } from "@/components/forms/rx-form";
 import { RxReviewDialog } from "@/components/forms/rx-review-dialog";
-import { RxHistory, RxLineRow } from "@/components/tray/rx-detail-dialog";
+import { RxChangeList, RxHistory, RxLineRow, VersionChain } from "@/components/tray/rx-detail-dialog";
 import { fmtDate } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/app-store";
@@ -28,8 +27,8 @@ const TABS: { value: RxStatus | "all"; label: string }[] = [
 ];
 
 function Inner() {
-  const params = useSearchParams();
-  const router = useRouter();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
   const prescriptions = useAppStore((s) => s.prescriptions);
   const patients = useAppStore((s) => s.patients);
   const medicines = useAppStore((s) => s.medicines);
@@ -48,11 +47,15 @@ function Inner() {
   const [discId, setDiscId] = useState<string | null>(null);
 
   const newFor = params.get("new");
+  const createParam = params.get("create");
   const reviewParam = params.get("review");
   const viewParam = params.get("view");
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => { if (newFor) { setFormPatient(newFor); setEditing(undefined); setAmend(undefined); setFormOpen(true); } }, [newFor]);
   useEffect(() => { if (reviewParam) setReviewId(reviewParam); }, [reviewParam]);
+  useEffect(() => { if (createParam) { setFormPatient(undefined); setEditing(undefined); setAmend(undefined); setFormOpen(true); } }, [createParam]);
+  const pStatus = params.get("status") as RxStatus | null;
+  useEffect(() => { if (pStatus) setStatus(pStatus); }, [pStatus]);
   useEffect(() => { if (viewParam) setViewId(viewParam); }, [viewParam]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -111,7 +114,7 @@ function Inner() {
     <>
       <PageHeader
         title="Prescription Management"
-        description="Enter scripts, send them for review and keep a full history of every change."
+        description="Enter scripts, send them for review and keep every version. Shared by standard dispensing and MDS."
         actions={<GuardedButton perm="rx.enter" what="add prescriptions" onClick={openNew}><Plus /> Add Prescription</GuardedButton>}
       />
       <ClinicalNotice>Reviews are simulated. Prescriptions are never verified automatically, and unclear lines stay out of trays.</ClinicalNotice>
@@ -133,13 +136,13 @@ function Inner() {
 
       <RxForm
         open={formOpen}
-        onOpenChange={(o) => { setFormOpen(o); if (!o && newFor) router.replace("/prescriptions"); }}
+        onOpenChange={(o) => { setFormOpen(o); if (!o && (newFor || createParam)) navigate("/prescriptions", { replace: true }); }}
         patientId={formPatient}
         editing={editing}
         amend={amend}
       />
-      <RxReviewDialog id={reviewId} onClose={() => { setReviewId(null); if (reviewParam) router.replace("/prescriptions"); }} />
-      <Sheet open={!!view} onOpenChange={(o) => { if (!o) { setViewId(null); if (viewParam) router.replace("/prescriptions"); } }}>
+      <RxReviewDialog id={reviewId} onClose={() => { setReviewId(null); if (reviewParam) navigate("/prescriptions", { replace: true }); }} />
+      <Sheet open={!!view} onOpenChange={(o) => { if (!o) { setViewId(null); if (viewParam) navigate("/prescriptions", { replace: true }); } }}>
         <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-[520px]">
           {view && (
             <>
@@ -151,12 +154,15 @@ function Inner() {
                 </SheetDescription>
               </SheetHeader>
               <div className="space-y-4 p-4">
+                <RxChangeList rx={view} />
                 <div className="space-y-2">{view.lines.map((l) => <RxLineRow key={l.id} line={l} />)}</div>
+                <div><p className="mb-1 text-[13px] font-semibold">Versions</p><VersionChain rx={view} onPick={setViewId} /></div>
                 {view.review?.note && <p className="rounded-lg bg-muted p-3 text-[13px]"><strong>Review note:</strong> {view.review.note}</p>}
                 <div><p className="mb-2 text-[13px] font-semibold">History</p><RxHistory rx={view} /></div>
                 <div className="flex flex-wrap gap-2 border-t border-border pt-3">
                   {view.status === "pending" && <GuardedButton perm="rx.review" what="review prescriptions" onClick={() => { setViewId(null); setReviewId(view.id); }}><Stethoscope /> Mock Pharmacist Review</GuardedButton>}
-                  {view.status === "verified" && <GuardedButton perm="rx.enter" what="amend prescriptions" variant="outline" onClick={() => { setViewId(null); setAmend(view); setEditing(undefined); setFormOpen(true); }}><FilePen /> Amend</GuardedButton>}
+                  {(view.status === "draft" || view.status === "rejected") && <GuardedButton perm="rx.enter" what="edit prescriptions" variant="outline" onClick={() => { setViewId(null); setEditing(view); setAmend(undefined); setFormOpen(true); }}><FilePen /> Edit and resubmit</GuardedButton>}
+                  {view.status === "verified" && <GuardedButton perm="rx.enter" what="amend prescriptions" variant="outline" onClick={() => { setViewId(null); setAmend(view); setEditing(undefined); setFormOpen(true); }}><FilePen /> Amend (new version)</GuardedButton>}
                   {view.status === "verified" && <GuardedButton perm="rx.review" what="discontinue prescriptions" variant="destructive" onClick={() => setDiscId(view.id)}><Ban /> Discontinue</GuardedButton>}
                 </div>
               </div>

@@ -1,10 +1,9 @@
-"use client";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { Link, useLocation, useNavigate } from "react-router";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  BarChart3, Bell, Boxes, ClipboardCheck, CreditCard, FileText, Grid3x3, HandHelping, LayoutDashboard, Menu, Pill, ScrollText, Search, Settings, ShieldAlert, Users,
+  BarChart3, Bell, Boxes, CalendarRange, ClipboardCheck, CreditCard, FileText, Grid3x3, HandHelping, LayoutDashboard, Menu, Pill, ScrollText, Search, Settings, ShieldAlert,
+  ShoppingBag, Store, Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -16,21 +15,26 @@ import { fmtShort } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/app-store";
 import type { Role } from "@/types";
+import { ROLES } from "@/types";
+import { ROLE_LABEL } from "@/lib/permissions";
 import { DemoGuide } from "./demo-guide";
 
 const NAV = [
   { href: "/", label: "Overview Dashboard", icon: LayoutDashboard },
   { href: "/patients", label: "Patients / PMR", icon: Users },
   { href: "/prescriptions", label: "Prescription Management", icon: ScrollText, count: "pendingRx" },
+  { href: "/dispensing", label: "Dispensing Queue", icon: ShoppingBag, count: "ordersAwaitingReview" },
+  { href: "/collection", label: "Collection & Delivery", icon: Store, count: "readyForCollection" },
+  { href: "/mds", label: "MDS Management", icon: CalendarRange, count: "enrolmentsPending" },
   { href: "/trays", label: "MDS Weekly Trays", icon: Grid3x3 },
-  { href: "/preparation", label: "Tray Preparation", icon: HandHelping, count: "pendingPreparation" },
-  { href: "/verification", label: "Pharmacist Verification", icon: ClipboardCheck, count: "awaitingVerification" },
+  { href: "/preparation", label: "MDS Preparation Queue", icon: HandHelping, count: "pendingPreparation" },
+  { href: "/verification", label: "Pharmacist Verification", icon: ClipboardCheck, count: "allAwaitingVerification" },
   { href: "/catalogue", label: "Medicine Catalogue", icon: Pill },
   { href: "/inventory", label: "Inventory Management", icon: Boxes, count: "lowStock" },
   { href: "/documents", label: "Documents & MAR Charts", icon: FileText },
-  { href: "/billing", label: "Billing & Subscriptions", icon: CreditCard },
+  { href: "/billing", label: "Billing & Payments", icon: CreditCard, count: "awaitingPayment" },
   { href: "/reports", label: "Reports & Analytics", icon: BarChart3 },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", label: "Settings & Admin", icon: Settings },
 ] as const;
 
 function BrandMark() {
@@ -46,17 +50,17 @@ function BrandMark() {
 }
 
 function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
-  const pathname = usePathname();
+  const { pathname } = useLocation();
   const name = useAppStore((s) => s.settings.pharmacyName);
   const state = useAppStore();
   const counts = useMemo(() => kpis(state), [state]);
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <Link href="/" onClick={onNavigate} className="flex items-center gap-2.5 px-4 py-4">
+      <Link to="/" onClick={onNavigate} className="flex items-center gap-2.5 px-4 py-4">
         <BrandMark />
         <span>
           <span className="block leading-tight font-bold text-white">{name}</span>
-          <span className="block text-xs text-[#9FB2CC]">PMR and weekly trays</span>
+          <span className="block text-xs text-[#9FB2CC]">Dispensing and MDS Dossett</span>
         </span>
       </Link>
       <nav aria-label="Main" className="flex-1 space-y-0.5 overflow-y-auto px-2.5 pb-3">
@@ -66,7 +70,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
           return (
             <Link
               key={n.href}
-              href={n.href}
+              to={n.href}
               onClick={onNavigate}
               aria-current={active ? "page" : undefined}
               className={cn(
@@ -88,12 +92,6 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-const ROLES: { role: Role; label: string }[] = [
-  { role: "admin", label: "Admin" },
-  { role: "pharmacist", label: "Pharmacist" },
-  { role: "dispenser", label: "Dispensing" },
-];
-
 function RoleSwitcher() {
   const role = useAppStore((s) => s.role);
   const setRole = useAppStore((s) => s.setRole);
@@ -101,23 +99,17 @@ function RoleSwitcher() {
   const user = staff.find((u) => u.role === role)!;
   return (
     <div className="flex items-center gap-2.5">
-      <div role="radiogroup" aria-label="Demo role. UI simulation only, not security." title="UI-only simulation, not security enforcement" className="flex rounded-lg bg-muted p-0.5">
-        {ROLES.map((r) => (
-          <button
-            key={r.role}
-            type="button"
-            role="radio"
-            aria-checked={role === r.role}
-            onClick={() => setRole(r.role)}
-            className={cn(
-              "rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-              role === r.role ? "bg-sidebar text-white shadow-sm" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {r.label}
-          </button>
-        ))}
-      </div>
+      <label className="flex items-center gap-1.5 text-[13px]" title="UI-only simulation, not security enforcement">
+        <span className="hidden text-muted-foreground sm:inline">Demo role</span>
+        <select
+          aria-label="Demo role. UI simulation only, not security."
+          value={role}
+          onChange={(e) => setRole(e.target.value as Role)}
+          className="h-9 rounded-lg border border-input bg-sidebar px-2.5 text-[13px] font-semibold text-white focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+        </select>
+      </label>
       <div className="hidden items-center gap-2 xl:flex">
         <span className="flex size-8 items-center justify-center rounded-full bg-accent text-xs font-bold text-accent-foreground">{user.initials}</span>
         <span className="leading-tight">
@@ -130,7 +122,7 @@ function RoleSwitcher() {
 }
 
 function Notifications() {
-  const router = useRouter();
+  const navigate = useNavigate();
   const state = useAppStore();
   const [open, setOpen] = useState(false);
   const items = useMemo(() => notificationsFor(state, state.role), [state]);
@@ -159,7 +151,7 @@ function Notifications() {
             <button
               key={n.id}
               type="button"
-              onClick={() => { state.markNotificationsRead([n.id]); setOpen(false); router.push(n.href); }}
+              onClick={() => { state.markNotificationsRead([n.id]); setOpen(false); navigate(n.href); }}
               className="flex w-full items-start gap-2.5 border-b border-border/60 px-4 py-2.5 text-left last:border-0 hover:bg-accent/50"
             >
               <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", n.tone === "danger" ? "bg-danger" : n.tone === "warn" ? "bg-warn" : "bg-info", read.includes(n.id) && "opacity-25")} />
@@ -176,12 +168,13 @@ function Notifications() {
 }
 
 function GlobalSearch() {
-  const router = useRouter();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const patients = useAppStore((s) => s.patients);
   const medicines = useAppStore((s) => s.medicines);
   const prescriptions = useAppStore((s) => s.prescriptions);
   const trays = useAppStore((s) => s.trays);
+  const orders = useAppStore((s) => s.orders);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setOpen((o) => !o); }
@@ -189,7 +182,7 @@ function GlobalSearch() {
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
-  const go = (href: string) => { setOpen(false); router.push(href); };
+  const go = (href: string) => { setOpen(false); navigate(href); };
   const pname = (id: string) => patients.find((p) => p.id === id)?.name ?? id;
   return (
     <>
@@ -199,7 +192,7 @@ function GlobalSearch() {
         className="flex h-9 w-full max-w-md items-center gap-2 rounded-lg border border-input bg-card px-3 text-sm text-muted-foreground hover:border-primary/50 focus-visible:ring-3 focus-visible:ring-ring/40 focus-visible:outline-none"
       >
         <Search className="size-4" />
-        <span className="flex-1 truncate text-left">Search patients, medicines, prescriptions, trays</span>
+        <span className="flex-1 truncate text-left">Search patients, QR codes, orders, tokens, medicines, trays</span>
         <kbd className="hidden rounded border border-border bg-muted px-1.5 text-xs md:inline">⌘K</kbd>
       </button>
       <CommandDialog open={open} onOpenChange={setOpen} title="Search" description="Find patients, medicines, prescriptions, trays and pages">
@@ -208,7 +201,7 @@ function GlobalSearch() {
           <CommandEmpty>Nothing matches that search.</CommandEmpty>
           <CommandGroup heading="Patients">
             {patients.map((p) => (
-              <CommandItem key={p.id} value={`${p.name} ${p.id} ${p.phone}`} onSelect={() => go(`/patients/${p.id}`)}>
+              <CommandItem key={p.id} value={`${p.name} ${p.id} ${p.phone} ${p.qrToken} ${p.dob}`} onSelect={() => go(`/patients/${p.id}`)}>
                 <Users className="size-4" /> {p.name} <span className="ml-auto text-xs text-muted-foreground">{p.id}</span>
               </CommandItem>
             ))}
@@ -224,6 +217,13 @@ function GlobalSearch() {
             {prescriptions.map((p) => (
               <CommandItem key={p.id} value={`${p.id} ${pname(p.patientId)} prescription`} onSelect={() => go(`/prescriptions?view=${p.id}`)}>
                 <ScrollText className="size-4" /> {p.id} <span className="ml-auto text-xs text-muted-foreground">{pname(p.patientId)}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+          <CommandGroup heading="Dispensing orders">
+            {orders.map((o) => (
+              <CommandItem key={o.id} value={`${o.id} ${o.token} ${pname(o.patientId)} order token`} onSelect={() => go(`/dispensing?order=${o.id}`)}>
+                <ShoppingBag className="size-4" /> {o.id} <span className="font-semibold">{o.token}</span> <span className="ml-auto text-xs text-muted-foreground">{pname(o.patientId)}</span>
               </CommandItem>
             ))}
           </CommandGroup>
@@ -250,7 +250,7 @@ function GlobalSearch() {
 export function AppShell({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
-  const pathname = usePathname();
+  const { pathname } = useLocation();
   const name = useAppStore((s) => s.settings.pharmacyName);
   const markVisit = useAppStore((s) => s.markVisit);
   const journeyStep = useAppStore((s) => s.journeyStep);
@@ -258,6 +258,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/set-state-in-effect -- the store reads localStorage, so render only after mount
   useEffect(() => setMounted(true), []);
   useEffect(() => { if (mounted) markVisit(pathname); }, [pathname, mounted, markVisit, journeyStep]);
+
+  // The public collection display is meant for a screen facing patients: no navigation, no staff tools.
+  if (pathname === "/display") return <>{children}</>;
 
   if (!mounted) {
     return (

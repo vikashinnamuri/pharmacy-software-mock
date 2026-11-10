@@ -1,4 +1,3 @@
-"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AlertTriangle, Check, CornerDownLeft, Eye, RotateCcw } from "lucide-react";
@@ -7,7 +6,7 @@ import { PERIOD_META } from "@/components/common/ui";
 import { addDays, DAY_NAMES, fmtShort, today } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { Compartment, Medicine, Tray } from "@/types";
-import { PERIODS } from "@/types";
+import { ALL_PERIODS } from "@/types";
 
 export type TrayDensity = "full" | "compact";
 
@@ -136,6 +135,8 @@ export function TrayGrid({
     return m;
   }, [tray.compartments]);
   const firstFilled = useMemo(() => tray.compartments.find((c) => c.items.length)?.id, [tray.compartments]);
+  /** Rows come from the tray itself, so approved Before Food periods appear only for that patient. */
+  const PERIODS = useMemo(() => ALL_PERIODS.filter((p) => tray.compartments.some((c) => c.period === p)), [tray.compartments]);
 
   /** Arrow keys move between filled wells; Enter (native click) opens one. */
   const onKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
@@ -152,14 +153,14 @@ export function TrayGrid({
     for (let i = 0; i < 28; i++) {
       day += mv[0];
       p += mv[1];
-      if (day < 0 || day > 6 || p < 0 || p > 3) return;
+      if (day < 0 || day > 6 || p < 0 || p > PERIODS.length - 1) return;
       const next = byKey.get(`${day}-${PERIODS[p]}`);
       if (next?.items.length) {
         rootRef.current?.querySelector<HTMLButtonElement>(`[data-well="${next.id}"]`)?.focus();
         return;
       }
     }
-  }, [byKey, tray.compartments]);
+  }, [byKey, tray.compartments, PERIODS]);
 
   const col = density === "full" ? "grid-cols-[76px_repeat(7,minmax(112px,1fr))]" : "grid-cols-[34px_repeat(7,minmax(48px,1fr))]";
 
@@ -181,12 +182,12 @@ export function TrayGrid({
           const meta = PERIOD_META[period];
           return (
             <div key={period} className="contents">
-              <div className={cn("flex flex-col items-center justify-center rounded-md text-center transition-colors", hover?.period === period && "bg-white/80")}>
+              <div className={cn("flex flex-col items-center justify-center rounded-md text-center transition-colors", meta.bf && "bg-accent/60", hover?.period === period && "bg-white/80")}>
                 <meta.icon className={cn(density === "full" ? "size-[18px]" : "size-4", meta.tint)} aria-hidden />
                 {density === "full" ? (
                   <>
                     <span className="mt-0.5 text-[12.5px] leading-tight font-semibold">{meta.label}</span>
-                    <span className="text-[11px] text-muted-foreground">{meta.time}</span>
+                    <span className="text-[11px] text-muted-foreground">{meta.bf ? "BF, set per patient" : meta.time}</span>
                   </>
                 ) : <span className="sr-only">{meta.label}</span>}
               </div>

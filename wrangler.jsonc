@@ -1,23 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "main": ".open-next/worker.js",
   "name": "proptoype-2",
   "compatibility_date": "2026-11-03",
-  "compatibility_flags": [
-    "global_fetch_strictly_public"
-  ],
+  // Static Vite build served from Cloudflare Workers Static Assets.
+  // Unknown paths fall back to index.html so client-side routes deep-link correctly.
   "assets": {
-    "directory": ".open-next/assets",
-    "binding": "ASSETS"
-  },
-  "services": [
-    {
-      "binding": "WORKER_SELF_REFERENCE",
-      "service": "proptoype-2"
-    }
-  ],
-  "images": {
-    "binding": "IMAGES"
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
   },
   "observability": {
     "enabled": true

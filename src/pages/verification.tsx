@@ -1,7 +1,5 @@
-"use client";
 
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { Suspense, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Eye, FileText, Lock, RotateCcw, ScrollText, ShieldCheck, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,7 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PillArt } from "@/components/common/pill-art";
-import { RxBadge, SuitabilityBadge, TrayBadge } from "@/components/common/status-badge";
+import { OrderBadge, RxBadge, SuitabilityBadge, TrayBadge } from "@/components/common/status-badge";
+import { OrderSheet } from "@/components/orders/order-sheet";
 import { Card, ClinicalNotice, ConfirmDialog, EmptyState, Field, GuardedButton, notify, PageHeader, PERIOD_META, useGuard } from "@/components/common/ui";
 import { BatchFacts } from "@/components/tray/compartment-drawer";
 import { RxDetailDialog, RxLineRow } from "@/components/tray/rx-detail-dialog";
@@ -41,12 +40,20 @@ const EVENT_LABEL: Record<string, string> = {
   rejected: "Tray rejected",
   "correction-requested": "Correction requested",
   invalidated: "Approval invalidated",
-  supplied: "Marked supplied",
+  supplied: "Completed (handed over)",
   "replacement-created": "Replacement created",
+  released: "Released for review",
+  "change-flagged": "Prescription change flagged",
+  "schedule-edited": "Schedule edited",
+  ready: "Ready for collection / delivery",
+  held: "Put on hold",
+  resumed: "Resumed",
+  cancelled: "Cancelled",
+  assigned: "Assigned",
 };
 
 function Review({ tray }: { tray: Tray }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const patient = useAppStore((s) => s.patients.find((p) => p.id === tray.patientId));
   const medicines = useAppStore((s) => s.medicines);
   const batches = useAppStore((s) => s.batches);
@@ -172,9 +179,9 @@ function Review({ tray }: { tray: Tray }) {
             ) : (
               <div className="flex flex-wrap items-center gap-2 text-[13px]">
                 <span className="text-muted-foreground">This tray is not waiting for verification.</span>
-                <Button size="sm" variant="outline" onClick={() => router.push(`/trays?tray=${tray.id}`)}>Open in weekly trays</Button>
+                <Button size="sm" variant="outline" onClick={() => navigate(`/trays?tray=${tray.id}`)}>Open in weekly trays</Button>
                 {(tray.status === "approved" || tray.status === "supplied") && (
-                  <Button size="sm" variant="outline" onClick={() => router.push(`/documents?type=backing&tray=${tray.id}`)}><FileText /> Backing sheet</Button>
+                  <Button size="sm" variant="outline" onClick={() => navigate(`/documents?type=backing&tray=${tray.id}`)}><FileText /> Backing sheet</Button>
                 )}
               </div>
             )}
@@ -227,7 +234,7 @@ function Review({ tray }: { tray: Tray }) {
         description={`Recorded against ${"the simulated pharmacist"}. The approval lapses automatically if the prescription or tray contents change.`}
         reasonLabel="Note (optional)"
         confirmLabel="Approve Tray"
-        onConfirm={(note) => { if (notify(approveTray(tray.id, note || undefined))) router.push(`/trays?tray=${tray.id}`); }}
+        onConfirm={(note) => { if (notify(approveTray(tray.id, note || undefined))) navigate(`/trays?tray=${tray.id}`); }}
       />
       <ConfirmDialog
         open={rejectOpen}
@@ -238,7 +245,7 @@ function Review({ tray }: { tray: Tray }) {
         reasonRequired
         destructive
         confirmLabel="Reject Tray"
-        onConfirm={(note) => { if (notify(rejectTray(tray.id, note))) router.push(`/trays?tray=${tray.id}`); }}
+        onConfirm={(note) => { if (notify(rejectTray(tray.id, note))) navigate(`/trays?tray=${tray.id}`); }}
       />
       <Dialog open={correctOpen} onOpenChange={setCorrectOpen}>
         <DialogContent className="sm:max-w-md">
@@ -256,7 +263,7 @@ function Review({ tray }: { tray: Tray }) {
             <Button
               disabled={!correctNote.trim() || !selected}
               onClick={() => {
-                if (selected && notify(requestCorrection(tray.id, [selected.id], correctNote))) { setCorrectOpen(false); setCorrectNote(""); router.push("/verification"); }
+                if (selected && notify(requestCorrection(tray.id, [selected.id], correctNote))) { setCorrectOpen(false); setCorrectNote(""); navigate("/verification"); }
               }}
             >
               Request Correction
@@ -270,11 +277,16 @@ function Review({ tray }: { tray: Tray }) {
 }
 
 function Inner() {
-  const params = useSearchParams();
+  const [params] = useSearchParams();
   const trays = useAppStore((s) => s.trays);
   const patients = useAppStore((s) => s.patients);
+  const orders = useAppStore((s) => s.orders);
+  const prescriptions = useAppStore((s) => s.prescriptions);
+  const [orderId, setOrderId] = useState<string | null>(null);
   const tray = trays.find((t) => t.id === params.get("tray"));
   const queue = trays.filter((t) => t.status === "awaiting-verification");
+  const orderChecks = orders.filter((o) => o.status === "awaiting-verification" || o.status === "awaiting-review");
+  const rxPending = prescriptions.filter((p) => p.status === "pending");
   const recent = trays
     .filter((t) => t.events.some((e) => ["approved", "rejected", "correction-requested"].includes(e.type)))
     .flatMap((t) => t.events.filter((e) => ["approved", "rejected", "correction-requested"].includes(e.type)).map((e) => ({ t, e })))
@@ -284,15 +296,15 @@ function Inner() {
 
   return (
     <>
-      <PageHeader title="Pharmacist Verification" description="Check every compartment against the verified prescription before a tray can be supplied." />
+      <PageHeader title="Pharmacist Verification" description="One queue for the pharmacist: MDS trays, dispensing order reviews and final checks, and prescriptions waiting for review." />
       <ClinicalNotice>Approvals here are simulated and recorded against a mock user. They carry no clinical or regulatory weight.</ClinicalNotice>
       {tray ? (
         <>
           {queue.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-1.5">
-              <Button size="sm" variant="ghost" render={<Link href="/verification" />}>All trays in queue</Button>
+              <Button size="sm" variant="ghost" render={<Link to="/verification" />}>All trays in queue</Button>
               {queue.map((t) => (
-                <Button key={t.id} size="sm" variant={t.id === tray.id ? "secondary" : "ghost"} render={<Link href={`/verification?tray=${t.id}`} />}>{name(t.patientId)}</Button>
+                <Button key={t.id} size="sm" variant={t.id === tray.id ? "secondary" : "ghost"} render={<Link to={`/verification?tray=${t.id}`} />}>{name(t.patientId)}</Button>
               ))}
             </div>
           )}
@@ -301,17 +313,17 @@ function Inner() {
       ) : (
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
           <Card>
-            <p className="px-5 pt-4 pb-2 font-semibold">Waiting for verification ({queue.length})</p>
+            <p className="px-5 pt-4 pb-2 font-semibold">MDS trays awaiting pharmacist check ({queue.length})</p>
             {queue.length === 0 && <EmptyState icon={<ClipboardCheck className="size-5" />} title="The queue is clear" body="A tray appears here when preparation staff submit it." />}
             <ul>
               {queue.map((t) => {
                 const p = trayProgress(t);
                 return (
                   <li key={t.id} className="border-t border-border">
-                    <Link href={`/verification?tray=${t.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-accent/50">
+                    <Link to={`/verification?tray=${t.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-accent/50">
                       <span className="flex-1">
                         <span className="block font-semibold">{name(t.patientId)}</span>
-                        <span className="block text-[13px] text-muted-foreground">{t.id}, {weekLabel(t.weekStart)}, {p.total} compartments</span>
+                        <span className="block text-[13px] text-muted-foreground">{t.id}, {weekLabel(t.weekStart)}{t.cycleId ? `, ${t.cycleId} week ${t.cycleWeek}` : ""}, {p.total} compartments</span>
                       </span>
                       {p.issues > 0 && <span className="flex items-center gap-1 text-[13px] font-medium text-warn"><AlertTriangle className="size-3.5" /> {p.issues} discrepancy</span>}
                       <Button size="sm" variant="outline">Review</Button>
@@ -321,12 +333,42 @@ function Inner() {
               })}
             </ul>
           </Card>
+          <div className="space-y-3">
+          <Card>
+            <p className="px-5 pt-4 pb-2 font-semibold">Dispensing orders ({orderChecks.length})</p>
+            {orderChecks.length === 0 && <p className="px-5 pb-4 text-[13px] text-muted-foreground">No orders need the pharmacist.</p>}
+            <ul>
+              {orderChecks.map((o) => (
+                <li key={o.id} className="border-t border-border">
+                  <button type="button" onClick={() => setOrderId(o.id)} className="flex w-full items-center gap-3 px-5 py-2.5 text-left hover:bg-accent/50">
+                    <span className="rounded-md bg-sidebar px-2 py-0.5 text-sm font-bold text-white">{o.token}</span>
+                    <span className="flex-1 text-[13px]"><span className="block font-semibold">{name(o.patientId)}</span><span className="block text-muted-foreground">{o.id}, {o.status === "awaiting-review" ? "dispensing review" : "final check"}</span></span>
+                    <OrderBadge order={o} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Card>
+          <Card>
+            <p className="px-5 pt-4 pb-2 font-semibold">Prescriptions to review ({rxPending.length})</p>
+            <ul>
+              {rxPending.map((p) => (
+                <li key={p.id} className="border-t border-border">
+                  <Link to={`/prescriptions?review=${p.id}`} className="flex items-center justify-between gap-2 px-5 py-2.5 text-[13px] hover:bg-accent/50">
+                    <span><span className="font-semibold">{name(p.patientId)}</span> <span className="text-muted-foreground">{p.id}{p.supersedes ? `, amends ${p.supersedes}` : ""}</span></span>
+                    <RxBadge status={p.status} />
+                  </Link>
+                </li>
+              ))}
+              {!rxPending.length && <li className="px-5 pb-4 text-[13px] text-muted-foreground">None waiting.</li>}
+            </ul>
+          </Card>
           <Card>
             <p className="px-5 pt-4 pb-2 font-semibold">Recent decisions</p>
             <ul>
               {recent.map(({ t, e }) => (
                 <li key={e.id} className="border-t border-border">
-                  <Link href={`/verification?tray=${t.id}`} className="flex items-start gap-2.5 px-5 py-2.5 text-[13px] hover:bg-accent/50">
+                  <Link to={`/verification?tray=${t.id}`} className="flex items-start gap-2.5 px-5 py-2.5 text-[13px] hover:bg-accent/50">
                     {e.type === "approved" ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ok" /> : e.type === "rejected" ? <XCircle className="mt-0.5 size-4 shrink-0 text-danger" /> : <RotateCcw className="mt-0.5 size-4 shrink-0 text-warn" />}
                     <span>
                       <span className="font-semibold">{EVENT_LABEL[e.type]}</span>: {t.id} for {name(t.patientId)}
@@ -337,8 +379,10 @@ function Inner() {
               ))}
             </ul>
           </Card>
+          </div>
         </div>
       )}
+      <OrderSheet orderId={orderId} onClose={() => setOrderId(null)} />
     </>
   );
 }

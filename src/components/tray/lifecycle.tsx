@@ -2,8 +2,10 @@ import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Tray, TrayStatus } from "@/types";
 
-const STEPS = ["Schedule proposed", "Schedule approved", "Compartments prepared", "Pharmacist verified", "Supplied"];
+const STEPS = ["Scheduled", "Suitability reviewed", "Prepared", "Pharmacist checked", "Ready", "Completed"];
 const REACHED: Record<TrayStatus, number> = {
+  scheduled: 0,
+  "awaiting-rx-validation": 1,
   proposed: 1,
   "awaiting-preparation": 2,
   "in-preparation": 2,
@@ -12,13 +14,17 @@ const REACHED: Record<TrayStatus, number> = {
   rejected: 3,
   "approval-invalidated": 3,
   approved: 4,
-  supplied: 5,
+  ready: 5,
+  supplied: 6,
+  "on-hold": 0,
+  cancelled: 0,
 };
 
-/** Five real stages a tray moves through. */
-export function TrayLifecycle({ tray }: { tray: Pick<Tray, "status"> }) {
-  const reached = REACHED[tray.status];
-  const broken = tray.status === "rejected" || tray.status === "approval-invalidated" || tray.status === "correction-requested";
+/** The stages a weekly tray moves through, from planning to hand-over. */
+export function TrayLifecycle({ tray }: { tray: Pick<Tray, "status" | "heldFrom"> }) {
+  const status = tray.status === "on-hold" && tray.heldFrom ? tray.heldFrom : tray.status;
+  const reached = REACHED[status];
+  const broken = ["rejected", "approval-invalidated", "correction-requested", "awaiting-rx-validation", "on-hold", "cancelled"].includes(tray.status);
   return (
     <ol className="flex items-center gap-1 overflow-x-auto py-1">
       {STEPS.map((s, i) => {

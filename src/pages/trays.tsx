@@ -1,11 +1,9 @@
-"use client";
 
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
-  AlertTriangle, Ban, Check, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, CopyPlus, FileText, HandHelping, PackageCheck, RefreshCw, Sparkles,
+  AlertTriangle, Ban, CalendarRange, Check, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, CopyPlus, FileText, HandHelping, History, PackageCheck, PackageOpen, Pause, Play, RefreshCw, Send, Sparkles, Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -14,15 +12,17 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/common/data-table";
 import { PillArt } from "@/components/common/pill-art";
-import { MdsBadge, TrayBadge } from "@/components/common/status-badge";
+import { MdsBadge, TrayBadge, trayStatusLabel } from "@/components/common/status-badge";
+import { VersionsDialog } from "@/components/mds/cycle-planner";
 import { Card, ClinicalNotice, ConfirmDialog, GuardedButton, notify, Pick, SearchInput } from "@/components/common/ui";
 import { CompartmentDrawer } from "@/components/tray/compartment-drawer";
 import { TrayLifecycle } from "@/components/tray/lifecycle";
 import { TrayGrid, TrayLegend } from "@/components/tray/tray-grid";
 import { addDays, fmtDateTime, mondayOf, today, weekLabel } from "@/lib/dates";
-import { lineBlockReason, trayProgress } from "@/lib/tray-engine";
+import { lineBlockReason, periodName, trayProgress } from "@/lib/tray-engine";
+import { enrolmentFor } from "@/lib/selectors";
 import { useAppStore } from "@/store/app-store";
-import type { Compartment, Tray } from "@/types";
+import type { Compartment, Tray, TrayStatus } from "@/types";
 import { PERIODS } from "@/types";
 
 function emptyCompartments(): Compartment[] {
@@ -82,32 +82,47 @@ function WeekPicker({ value, onChange }: { value: string; onChange: (w: string) 
 
 /** The one thing to do next on this tray. */
 function NextAction({ tray, onSupply, onRegenerate }: { tray: Tray; onSupply: () => void; onRegenerate: () => void }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const approveSchedule = useAppStore((s) => s.approveSchedule);
   const createReplacement = useAppStore((s) => s.createReplacement);
   const resend = useAppStore((s) => s.resendForVerification);
-  const backing = <Button variant="outline" onClick={() => router.push(`/documents?type=backing&tray=${tray.id}`)}><FileText /> View backing sheet</Button>;
+  const releaseWeek = useAppStore((s) => s.releaseWeek);
+  const markTrayReady = useAppStore((s) => s.markTrayReady);
+  const resumeTray = useAppStore((s) => s.resumeTray);
+  const backing = <Button variant="outline" onClick={() => navigate(`/documents?type=backing&tray=${tray.id}`)}><FileText /> View backing sheet</Button>;
 
-  if (tray.needsRegeneration && tray.status !== "supplied" && tray.status !== "rejected") {
-    return <GuardedButton perm="tray.generate" what="regenerate schedules" onClick={onRegenerate}><RefreshCw /> Regenerate schedule</GuardedButton>;
+  if (tray.needsRegeneration && !["supplied", "rejected", "cancelled", "on-hold"].includes(tray.status)) {
+    return <GuardedButton perm="tray.generate" what="regenerate schedules" onClick={onRegenerate}><RefreshCw /> Rebuild for pharmacist review</GuardedButton>;
   }
   switch (tray.status) {
+    case "scheduled":
+      return <GuardedButton perm="tray.generate" what="release planned weeks" onClick={() => notify(releaseWeek(tray.id))}><Send /> Release for review</GuardedButton>;
+    case "awaiting-rx-validation":
+      return <Button variant="outline" onClick={() => navigate(`/prescriptions?status=pending`)}>Validate pending prescriptions</Button>;
     case "proposed":
       return <GuardedButton perm="tray.approveSchedule" what="approve schedules" onClick={() => notify(approveSchedule(tray.id))}><Check /> Approve schedule</GuardedButton>;
     case "awaiting-preparation":
     case "in-preparation":
     case "correction-requested":
-      return <Button onClick={() => router.push(`/preparation?tray=${tray.id}`)}><HandHelping /> {tray.status === "correction-requested" ? "Fix and resubmit" : "Open preparation"}</Button>;
+      return <Button onClick={() => navigate(`/preparation?tray=${tray.id}`)}><HandHelping /> {tray.status === "correction-requested" ? "Fix and resubmit" : "Open preparation"}</Button>;
     case "awaiting-verification":
-      return <Button onClick={() => router.push(`/verification?tray=${tray.id}`)}><ClipboardCheck /> Open verification</Button>;
+      return <Button onClick={() => navigate(`/verification?tray=${tray.id}`)}><ClipboardCheck /> Open verification</Button>;
     case "approved":
-      return <div className="flex flex-wrap gap-2">{backing}<GuardedButton perm="tray.supply" what="supply trays" onClick={onSupply}><PackageCheck /> Mark supplied</GuardedButton></div>;
+      return <div className="flex flex-wrap gap-2">{backing}<GuardedButton perm="tray.supply" what="mark trays ready" onClick={() => notify(markTrayReady(tray.id, new Date(Date.now() + 2 * 3600_000).toISOString()))}><PackageOpen /> Mark ready for collection / delivery</GuardedButton></div>;
+    case "ready":
+      return tray.fulfilment?.method === "delivery"
+        ? <div className="flex flex-wrap gap-2">{backing}<Button onClick={() => navigate("/collection?tab=delivery")}><Truck /> Delivery management</Button></div>
+        : <div className="flex flex-wrap gap-2">{backing}<GuardedButton perm="tray.supply" what="hand over trays" onClick={onSupply}><PackageCheck /> Record collection</GuardedButton></div>;
     case "approval-invalidated":
       return <GuardedButton perm="tray.verify" what="resubmit trays" onClick={() => notify(resend(tray.id))}><ClipboardCheck /> Send back for verification</GuardedButton>;
     case "rejected":
-      return <GuardedButton perm="tray.generate" what="create replacement trays" onClick={() => { const r = createReplacement(tray.id); if (notify(r) && r.id) router.push(`/trays?tray=${r.id}`); }}><CopyPlus /> Create replacement tray</GuardedButton>;
+      return <GuardedButton perm="tray.generate" what="create replacement trays" onClick={() => { const r = createReplacement(tray.id); if (notify(r) && r.id) navigate(`/trays?tray=${r.id}`); }}><CopyPlus /> Create replacement tray</GuardedButton>;
+    case "on-hold":
+      return <GuardedButton perm="tray.verify" what="resume trays" onClick={() => notify(resumeTray(tray.id))}><Play /> Resume</GuardedButton>;
     case "supplied":
       return backing;
+    case "cancelled":
+      return null;
   }
 }
 
@@ -115,11 +130,21 @@ function GeneratePanel({ patientId, weekStart, onGenerated }: { patientId: strin
   const prescriptions = useAppStore((s) => s.prescriptions);
   const medicines = useAppStore((s) => s.medicines);
   const generateTray = useAppStore((s) => s.generateTray);
+  const enrolment = useAppStore((s) => enrolmentFor(s, patientId));
   const verified = prescriptions.filter((p) => p.patientId === patientId && p.status === "verified");
   const lines = verified.flatMap((p) => p.lines.map((l) => {
     const med = medicines.find((m) => m.id === l.medicineId);
-    return { l, med, reason: lineBlockReason(l, med) };
+    return { l, med, reason: lineBlockReason(l, med, enrolment?.approvedPeriods ?? []) };
   }));
+  if (!enrolment || enrolment.status !== "active") {
+    return (
+      <Card className="p-4">
+        <h2 className="font-semibold">This patient is not on active MDS</h2>
+        <p className="text-[13px] text-muted-foreground">{enrolment?.status === "pending-review" ? "The MDS enrolment is waiting for the pharmacist's suitability review." : enrolment?.status === "suspended" ? "The MDS service is suspended." : "Register the patient for MDS first. Enrolment is separate from ordinary registration."}</p>
+        <Button className="mt-3" variant="outline" render={<Link to={`/patients/${patientId}?tab=mds-enrolment`} />}>Open MDS enrolment</Button>
+      </Card>
+    );
+  }
   const pending = prescriptions.filter((p) => p.patientId === patientId && p.status === "pending").length;
   return (
     <Card className="p-4">
@@ -131,6 +156,7 @@ function GeneratePanel({ patientId, weekStart, onGenerated }: { patientId: strin
         <GuardedButton perm="tray.generate" what="generate schedules" disabled={!verified.length} onClick={() => { const r = generateTray(patientId, weekStart); if (notify(r) && r.id) onGenerated(r.id); }}>
           <Sparkles /> Generate Proposed Weekly Schedule
         </GuardedButton>
+        <Button variant="outline" render={<Link to={`/mds?patient=${patientId}`} />}><CalendarRange /> Plan four weeks</Button>
       </div>
       {lines.length > 0 ? (
         <ul className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -139,7 +165,7 @@ function GeneratePanel({ patientId, weekStart, onGenerated }: { patientId: strin
               {med && <PillArt medicine={med} size={28} />}
               <span className="min-w-0">
                 <span className="block font-semibold">{med?.brand} {l.strength}</span>
-                <span className={`block text-xs ${reason ? "text-warn" : "text-muted-foreground"}`}>{reason ?? `Goes in: ${l.times.join(", ")}`}</span>
+                <span className={`block text-xs ${reason ? "text-warn" : "text-muted-foreground"}`}>{reason ?? `Goes in: ${l.times.map(periodName).join(", ")}`}</span>
               </span>
             </li>
           ))}
@@ -147,7 +173,7 @@ function GeneratePanel({ patientId, weekStart, onGenerated }: { patientId: strin
       ) : (
         <p className="mt-3 flex items-center gap-2 rounded-lg bg-warn-bg p-3 text-[13px] text-warn">
           <Ban className="size-4 shrink-0" />
-          <span>This patient has no verified prescription, so a schedule cannot be generated. <Link className="font-semibold underline" href={`/prescriptions?new=${patientId}`}>Add a prescription</Link></span>
+          <span>This patient has no verified prescription, so a schedule cannot be generated. <Link className="font-semibold underline" to={`/prescriptions?new=${patientId}`}>Add a prescription</Link></span>
         </p>
       )}
       {pending > 0 && <p className="mt-2 text-[13px] text-muted-foreground">{pending} prescription{pending > 1 ? "s are" : " is"} still pending review and will not be used.</p>}
@@ -156,7 +182,7 @@ function GeneratePanel({ patientId, weekStart, onGenerated }: { patientId: strin
 }
 
 function TrayBoard() {
-  const params = useSearchParams();
+  const [params] = useSearchParams();
   const trays = useAppStore((s) => s.trays);
   const medicines = useAppStore((s) => s.medicines);
   const batches = useAppStore((s) => s.batches);
@@ -174,6 +200,9 @@ function TrayBoard() {
   const [drop, setDrop] = useState(false);
   const [supplyOpen, setSupplyOpen] = useState(false);
   const [regenOpen, setRegenOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [holdOpen, setHoldOpen] = useState(false);
+  const holdTray = useAppStore((s) => s.holdTray);
 
   useEffect(() => {
     if (fromParam) {
@@ -227,8 +256,10 @@ function TrayBoard() {
             <div className="flex flex-wrap items-center gap-2">
               <TrayBadge status={tray.status} />
               <span className="text-[13px] text-muted-foreground">
-                {tray.id}{tray.type === "replacement" && `, replaces ${tray.replacementOf}`}
+                {tray.id}{tray.type === "replacement" && `, replaces ${tray.replacementOf}`}{tray.cycleId && `, ${tray.cycleId} week ${tray.cycleWeek}`}{tray.fulfilment?.token && `, token ${tray.fulfilment.token}`}
               </span>
+              <Button size="xs" variant="ghost" onClick={() => setVersionsOpen(true)}><History /> Versions ({tray.revisions.length})</Button>
+              {!["supplied", "rejected", "cancelled", "on-hold"].includes(tray.status) && <GuardedButton size="xs" variant="ghost" perm="tray.verify" what="hold trays" onClick={() => setHoldOpen(true)}><Pause /> Hold</GuardedButton>}
             </div>
             <div className="hidden 2xl:block"><TrayLifecycle tray={tray} /></div>
             <NextAction tray={tray} onSupply={() => setSupplyOpen(true)} onRegenerate={() => setRegenOpen(true)} />
@@ -256,10 +287,11 @@ function TrayBoard() {
         </Card>
       )}
 
-      {tray?.needsRegeneration && tray.status !== "supplied" && tray.status !== "rejected" && (
+      {tray?.needsRegeneration && !["supplied", "rejected", "cancelled"].includes(tray.status) && (
         <div className="flex gap-2 rounded-lg border border-danger/30 bg-danger-bg p-3 text-[13px] text-danger">
           <AlertTriangle className="size-4 shrink-0" />
-          <span><strong>A source prescription or medicine changed.</strong> {tray.invalidatedReason ?? "This tray no longer matches the verified prescriptions."} Regenerate it before going further.</span>
+          <span><strong>A source prescription, medicine or approved period changed.</strong> {tray.invalidatedReason ?? "This tray no longer matches the verified prescriptions."} Rebuild it and send it for pharmacist review before going further.
+            {tray.pendingChanges?.length ? <ul className="mt-1 list-disc pl-5">{tray.pendingChanges.map((c) => <li key={c}>{c}</li>)}</ul> : null}</span>
         </div>
       )}
       {tray?.status === "approval-invalidated" && !tray.needsRegeneration && (
@@ -297,17 +329,21 @@ function TrayBoard() {
           <ConfirmDialog
             open={supplyOpen}
             onOpenChange={setSupplyOpen}
-            title="Mark this tray as supplied?"
-            description={`Deducts the units in ${tray.id} from stock once. This simulates handing the tray over and cannot be repeated.`}
-            confirmLabel="Mark supplied"
-            onConfirm={() => notify(supplyTray(tray.id))}
+            title={`Record collection of ${tray.id}?`}
+            description={`Deducts this week's units from stock once and completes the tray. Authorised: ${patient?.name}${patient?.caregiver ? `, ${patient.caregiver.name}` : ""}${patient?.representative ? `, ${patient.representative.name}` : ""}.`}
+            reasonLabel="Collected by (name, identity confirmed)"
+            reasonRequired
+            confirmLabel="Record collection"
+            onConfirm={(who) => notify(supplyTray(tray.id, who))}
           />
+          <ConfirmDialog open={holdOpen} onOpenChange={setHoldOpen} title={`Put ${tray.id} on hold?`} description="The tray keeps its record and can be resumed." reasonLabel="Reason" reasonRequired confirmLabel="Hold" onConfirm={(note) => notify(holdTray(tray.id, note))} />
+          {versionsOpen && <VersionsDialog tray={tray} onClose={() => setVersionsOpen(false)} />}
           <ConfirmDialog
             open={regenOpen}
             onOpenChange={setRegenOpen}
-            title="Regenerate this tray?"
-            description="Clears all preparation on this tray and rebuilds it from the current verified prescriptions. A pharmacist must approve the new schedule."
-            confirmLabel="Regenerate"
+            title="Rebuild this week?"
+            description="Clears preparation on this tray and rebuilds it from the current verified prescriptions. The previous version is kept. A pharmacist must approve the new schedule."
+            confirmLabel="Rebuild"
             destructive
             onConfirm={() => { if (notify(generateTray(tray.patientId, tray.weekStart))) startDrop(); }}
           />
@@ -319,7 +355,7 @@ function TrayBoard() {
   );
 }
 
-const STATUS_OPTIONS = ["proposed", "awaiting-preparation", "in-preparation", "awaiting-verification", "correction-requested", "approved", "approval-invalidated", "rejected", "supplied"];
+const STATUS_OPTIONS: TrayStatus[] = ["scheduled", "awaiting-rx-validation", "proposed", "awaiting-preparation", "in-preparation", "awaiting-verification", "correction-requested", "approved", "approval-invalidated", "ready", "rejected", "supplied", "on-hold", "cancelled"];
 
 function AllTrays({ onOpen, initialStatus }: { onOpen: (t: Tray) => void; initialStatus?: string }) {
   const trays = useAppStore((s) => s.trays);
@@ -336,7 +372,7 @@ function AllTrays({ onOpen, initialStatus }: { onOpen: (t: Tray) => void; initia
     { accessorKey: "id", header: "Tray", cell: ({ row }) => <span className="font-semibold">{row.original.id}</span> },
     { id: "patient", accessorFn: (t) => name(t.patientId), header: "Patient" },
     { accessorKey: "weekStart", header: "Week", cell: ({ row }) => weekLabel(row.original.weekStart) },
-    { accessorKey: "type", header: "Type", cell: ({ row }) => (row.original.type === "replacement" ? `Replacement of ${row.original.replacementOf}` : "Standard") },
+    { accessorKey: "type", header: "Type", cell: ({ row }) => (row.original.type === "replacement" ? `Replacement of ${row.original.replacementOf}` : row.original.cycleId ? `${row.original.cycleId} week ${row.original.cycleWeek}` : "Single week") },
     { id: "progress", accessorFn: (t) => trayProgress(t).pct, header: "Prepared", cell: ({ row }) => { const p = trayProgress(row.original); return `${p.prepared} of ${p.total}`; } },
     { accessorKey: "status", header: "Status", cell: ({ row }) => <TrayBadge status={row.original.status} /> },
   ];
@@ -348,7 +384,7 @@ function AllTrays({ onOpen, initialStatus }: { onOpen: (t: Tray) => void; initia
           className="h-9 w-[220px]"
           value={status}
           onChange={setStatus}
-          options={[{ value: "all", label: "All statuses" }, ...STATUS_OPTIONS.map((s) => ({ value: s, label: s.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()) }))]}
+          options={[{ value: "all", label: "All statuses" }, ...STATUS_OPTIONS.map((s) => ({ value: s, label: trayStatusLabel(s) }))]}
         />
       </div>
       <DataTable data={rows} columns={columns} pageSize={12} initialSort={[{ id: "weekStart", desc: true }]} onRowClick={onOpen} />
@@ -357,8 +393,8 @@ function AllTrays({ onOpen, initialStatus }: { onOpen: (t: Tray) => void; initia
 }
 
 function TraysInner() {
-  const router = useRouter();
-  const params = useSearchParams();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const initialStatus = params.get("status") ?? undefined;
   const [tab, setTab] = useState(initialStatus ? "all" : "board");
   const paramTray = params.get("tray");
@@ -371,9 +407,9 @@ function TraysInner() {
           <h1 className="text-[26px] leading-tight font-bold tracking-tight">MDS Weekly Trays</h1>
           <TabsList><TabsTrigger value="board">Tray view</TabsTrigger><TabsTrigger value="all">All trays</TabsTrigger></TabsList>
         </div>
-        <ClinicalNotice>Schedules are proposals built from mock prescriptions. A simulated pharmacist approves every step.</ClinicalNotice>
+        <ClinicalNotice>Schedules are proposals built from verified mock prescriptions. Before Food rows appear only when approved on the patient's enrolment. A simulated pharmacist approves every week.</ClinicalNotice>
         <TabsContent value="board"><TrayBoard /></TabsContent>
-        <TabsContent value="all"><AllTrays initialStatus={initialStatus} onOpen={(t) => { router.push(`/trays?tray=${t.id}`); setTab("board"); }} /></TabsContent>
+        <TabsContent value="all"><AllTrays initialStatus={initialStatus} onOpen={(t) => { navigate(`/trays?tray=${t.id}`); setTab("board"); }} /></TabsContent>
       </Tabs>
     </>
   );
